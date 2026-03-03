@@ -6,8 +6,8 @@ from io import BytesIO
 # -----------------------------
 # PAGE CONFIG
 # -----------------------------
-st.set_page_config(page_title="Emotion Analyzer", layout="centered")
-st.title("Emotion Analysis App (English + Manglish)")
+st.set_page_config(page_title="Emotion Chatbot", layout="centered")
+st.title("Emotion-Aware AI Chatbot")
 
 # -----------------------------
 # LOAD SECRETS
@@ -17,7 +17,7 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
 # -----------------------------
-# HUGGING FACE EMOTION MODEL
+# EMOTION MODEL
 # -----------------------------
 MODEL_URL = "https://router.huggingface.co/hf-inference/models/j-hartmann/emotion-english-distilroberta-base"
 
@@ -35,22 +35,27 @@ def analyze_emotion(text):
 
     if response.status_code != 200:
         st.error(f"Model API Error: {response.status_code}")
-        st.write(response.text)
         return None, None
 
-    try:
-        output = response.json()[0]
-        best = sorted(output, key=lambda x: x["score"], reverse=True)[0]
+    output = response.json()[0]
+    best = sorted(output, key=lambda x: x["score"], reverse=True)[0]
 
-        emotion = best["label"].capitalize()
-        confidence = round(best["score"], 4)
+    return best["label"].capitalize(), round(best["score"], 4)
 
-        return emotion, confidence
+# -----------------------------
+# EMOTION BASED RESPONSE SYSTEM
+# -----------------------------
+def generate_response(emotion):
+    responses = {
+        "Joy": "I'm really happy to hear that! 😊 Tell me more about what's making you feel good.",
+        "Sadness": "I'm sorry you're feeling this way. 💙 Do you want to talk about it?",
+        "Anger": "It sounds like something upset you. 😡 What happened?",
+        "Fear": "That sounds worrying. 😟 I'm here with you. What's on your mind?",
+        "Disgust": "That must have felt uncomfortable. 😕 Want to share more?",
+        "Neutral": "I see. Tell me more about that."
+    }
 
-    except Exception:
-        st.error("Unexpected model response format.")
-        st.write(response.text)
-        return None, None
+    return responses.get(emotion, "I'm here to listen. Tell me more.")
 
 # -----------------------------
 # SUPABASE CONFIG
@@ -62,8 +67,8 @@ supabase_headers = {
     "Prefer": "return=minimal"
 }
 
-def insert_review(data):
-    url = f"{SUPABASE_URL}/rest/v1/reviews"
+def insert_chat(data):
+    url = f"{SUPABASE_URL}/rest/v1/chats"
 
     response = requests.post(
         url,
@@ -74,12 +79,9 @@ def insert_review(data):
     if response.status_code not in [200, 201]:
         st.error(f"Supabase Insert Error: {response.status_code}")
         st.write(response.text)
-        return False
-    return True
 
-
-def fetch_reviews():
-    url = f"{SUPABASE_URL}/rest/v1/reviews?select=*"
+def fetch_chats():
+    url = f"{SUPABASE_URL}/rest/v1/chats?select=*"
 
     response = requests.get(
         url,
@@ -88,44 +90,44 @@ def fetch_reviews():
 
     if response.status_code != 200:
         st.error(f"Supabase Fetch Error: {response.status_code}")
-        st.write(response.text)
         return pd.DataFrame()
 
     return pd.DataFrame(response.json())
 
 # -----------------------------
-# USER INPUT SECTION
+# SESSION CHAT HISTORY
 # -----------------------------
-st.subheader("Submit Your Review")
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
-name = st.text_input("Enter Your Name")
-review = st.text_area("Enter Your Review (English / Manglish)")
+# -----------------------------
+# CHAT INTERFACE
+# -----------------------------
+user_input = st.chat_input("Type your message...")
 
-if st.button("Submit Review"):
+if user_input:
 
-    if name and review:
+    emotion, confidence = analyze_emotion(user_input)
 
-        with st.spinner("Analyzing emotion..."):
-            emotion, confidence = analyze_emotion(review)
+    if emotion:
+        bot_reply = generate_response(emotion)
 
-        if emotion:
+        # Store in session
+        st.session_state.chat_history.append(("You", user_input))
+        st.session_state.chat_history.append(("Bot", bot_reply))
 
-            data = {
-                "name": name,
-                "review": review,
-                "sentiment": emotion,   # Column name remains same in DB
-                "confidence": confidence
-            }
+        # Save to database
+        insert_chat({
+            "user_message": user_input,
+            "detected_emotion": emotion,
+            "confidence": confidence,
+            "bot_response": bot_reply
+        })
 
-            success = insert_review(data)
-
-            if success:
-                st.success(f"Detected Emotion: {emotion}")
-                st.info(f"Confidence: {confidence}")
-                st.rerun()
-
-    else:
-        st.warning("Please enter both Name and Review.")
+# Display chat history
+for speaker, message in st.session_state.chat_history:
+    with st.chat_message("user" if speaker == "You" else "assistant"):
+        st.write(message)
 
 # -----------------------------
 # ADMIN SECTION
@@ -144,7 +146,6 @@ if not st.session_state.admin_logged_in:
         if st.button("Login"):
             if pin == "8948":
                 st.session_state.admin_logged_in = True
-                st.success("Admin access granted")
                 st.rerun()
             else:
                 st.error("Incorrect PIN")
@@ -155,15 +156,13 @@ if not st.session_state.admin_logged_in:
 if st.session_state.admin_logged_in:
 
     st.markdown("---")
-    st.subheader("Admin Dashboard")
+    st.subheader("Chat Logs")
 
-    df = fetch_reviews()
+    df = fetch_chats()
 
     if not df.empty:
-
         st.dataframe(df, use_container_width=True)
 
-        # Excel export
         output = BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             df.to_excel(writer, index=False)
@@ -171,14 +170,14 @@ if st.session_state.admin_logged_in:
         output.seek(0)
 
         st.download_button(
-            label="Download Excel File",
+            label="Download Chat History",
             data=output,
-            file_name="emotion_results.xlsx",
+            file_name="chat_history.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
     else:
-        st.info("No data available yet.")
+        st.info("No chat data available.")
 
     if st.button("Logout Admin"):
         st.session_state.admin_logged_in = False
