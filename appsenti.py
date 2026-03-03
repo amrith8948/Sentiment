@@ -6,8 +6,8 @@ from io import BytesIO
 # -----------------------------
 # PAGE CONFIG
 # -----------------------------
-st.set_page_config(page_title="Sentiment Analyzer", layout="centered")
-st.title("English + Manglish Sentiment Analysis App")
+st.set_page_config(page_title="Emotion Analyzer", layout="centered")
+st.title("Emotion Analysis App (English + Manglish)")
 
 # -----------------------------
 # LOAD SECRETS
@@ -17,16 +17,16 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
 # -----------------------------
-# HUGGING FACE MODEL
+# HUGGING FACE EMOTION MODEL
 # -----------------------------
-MODEL_URL = "https://router.huggingface.co/hf-inference/models/cardiffnlp/twitter-xlm-roberta-base-sentiment"
+MODEL_URL = "https://router.huggingface.co/hf-inference/models/j-hartmann/emotion-english-distilroberta-base"
 
 hf_headers = {
     "Authorization": f"Bearer {HF_TOKEN}",
     "Content-Type": "application/json"
 }
 
-def analyze_sentiment(text):
+def analyze_emotion(text):
     response = requests.post(
         MODEL_URL,
         headers=hf_headers,
@@ -41,7 +41,12 @@ def analyze_sentiment(text):
     try:
         output = response.json()[0]
         best = sorted(output, key=lambda x: x["score"], reverse=True)[0]
-        return best["label"].capitalize(), round(best["score"], 4)
+
+        emotion = best["label"].capitalize()
+        confidence = round(best["score"], 4)
+
+        return emotion, confidence
+
     except Exception:
         st.error("Unexpected model response format.")
         st.write(response.text)
@@ -100,22 +105,22 @@ if st.button("Submit Review"):
 
     if name and review:
 
-        with st.spinner("Analyzing sentiment..."):
-            sentiment, confidence = analyze_sentiment(review)
+        with st.spinner("Analyzing emotion..."):
+            emotion, confidence = analyze_emotion(review)
 
-        if sentiment:
+        if emotion:
 
             data = {
                 "name": name,
                 "review": review,
-                "sentiment": sentiment,
+                "sentiment": emotion,   # Column name remains same in DB
                 "confidence": confidence
             }
 
             success = insert_review(data)
 
             if success:
-                st.success(f"Sentiment: {sentiment}")
+                st.success(f"Detected Emotion: {emotion}")
                 st.info(f"Confidence: {confidence}")
                 st.rerun()
 
@@ -168,7 +173,7 @@ if st.session_state.admin_logged_in:
         st.download_button(
             label="Download Excel File",
             data=output,
-            file_name="sentiment_results.xlsx",
+            file_name="emotion_results.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
