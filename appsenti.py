@@ -10,7 +10,8 @@ HF_TOKEN = st.secrets["HF_TOKEN"]
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
-MODEL = "j-hartmann/emotion-english-distilroberta-base"
+EMOTION_MODEL = "j-hartmann/emotion-english-distilroberta-base"
+GEN_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
 
 supabase_headers = {
     "apikey": SUPABASE_KEY,
@@ -18,10 +19,10 @@ supabase_headers = {
     "Content-Type": "application/json"
 }
 
-# ---------------- EMOTION ---------------- #
+# ---------------- EMOTION DETECTION ---------------- #
 
 def detect_emotion(text):
-    API_URL = f"https://router.huggingface.co/hf-inference/models/{MODEL}"
+    API_URL = f"https://router.huggingface.co/hf-inference/models/{EMOTION_MODEL}"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     payload = {"inputs": text}
 
@@ -32,9 +33,10 @@ def detect_emotion(text):
         emotions = result[0]
         top = max(emotions, key=lambda x: x["score"])
         return top["label"]
+
     return "neutral"
 
-# ---------------- LEAD TEMP ---------------- #
+# ---------------- LEAD TEMPERATURE ---------------- #
 
 def lead_temperature(emotion):
     if emotion in ["fear", "sadness"]:
@@ -43,66 +45,64 @@ def lead_temperature(emotion):
         return "WARM 🌤"
     return "COLD ❄"
 
-# ---------------- SMART RESPONSE ---------------- #
+# ---------------- AI GENERATED RESPONSE ---------------- #
 
 def generate_response(user_input, emotion):
 
-    text = user_input.lower()
+    API_URL = f"https://router.huggingface.co/hf-inference/models/{GEN_MODEL}"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
 
-    # Course detection
-    if "acca" in text:
-        course = "ACCA (Global Recognition 🌍)"
-    elif "ca" in text:
-        course = "CA (Strong India Value 🇮🇳)"
-    elif "cma" in text:
-        course = "CMA (Corporate Career 💼)"
-    else:
-        course = "ACCA / CA / CMA"
+    system_prompt = f"""
+You are a highly professional academic counsellor from Kerala.
+You help students decide between ACCA, CA, and CMA.
 
-    emotional_prefix = ""
+Student Emotion: {emotion}
 
-    if emotion == "fear":
-        emotional_prefix = "I understand you're feeling uncertain. "
-    elif emotion == "sadness":
-        emotional_prefix = "It sounds like you're confused. "
-    elif emotion == "anger":
-        emotional_prefix = "I understand the frustration. "
-    elif emotion == "joy":
-        emotional_prefix = "I love your confidence! "
+Instructions:
+- Answer specifically to the student question.
+- Be conversational and natural.
+- Use Kerala context where relevant.
+- Encourage booking a free career counselling call.
+- Keep response under 180 words.
+- Do NOT repeat the same template.
+"""
 
-    return (
-        emotional_prefix +
-        f"\n\nRegarding {course}, many Kerala students choose this after +2 or graduation."
-        "\n\nWith proper mentorship, first-attempt success becomes realistic."
-        "\n\n🎓 We provide:\n"
-        "✔ Malayalam + English Support\n"
-        "✔ Small Batches\n"
-        "✔ Personal Mentor\n"
-        "✔ Placement Guidance (Kerala & GCC)\n\n"
-        "Would you like to book a FREE career guidance call?"
-    )
+    full_prompt = f"<s>[INST] {system_prompt}\nStudent Question: {user_input} [/INST]"
+
+    payload = {
+        "inputs": full_prompt,
+        "parameters": {
+            "max_new_tokens": 200,
+            "temperature": 0.8
+        }
+    }
+
+    response = requests.post(API_URL, headers=headers, json=payload)
+    result = response.json()
+
+    if isinstance(result, list):
+        text = result[0]["generated_text"]
+        return text.split("[/INST]")[-1].strip()
+
+    return "Could you please clarify your question?"
 
 # ---------------- SUPABASE UPSERT ---------------- #
 
 def upsert_chat(phone, data):
 
-    url = f"{SUPABASE_URL}/rest/v1/chats?phone=eq.{phone}"
-
-    response = requests.get(url, headers=supabase_headers)
+    check_url = f"{SUPABASE_URL}/rest/v1/chats?phone=eq.{phone}"
+    response = requests.get(check_url, headers=supabase_headers)
 
     if response.status_code == 200 and response.json():
-        # Update existing row
         update_url = f"{SUPABASE_URL}/rest/v1/chats?phone=eq.{phone}"
         requests.patch(update_url, headers=supabase_headers, json=data)
     else:
-        # Insert new row
         insert_url = f"{SUPABASE_URL}/rest/v1/chats"
         requests.post(insert_url, headers=supabase_headers, json=data)
 
-# ---------------- UI ---------------- #
+# ---------------- STREAMLIT UI ---------------- #
 
-st.set_page_config(page_title="Kerala Academic Counsellor")
-
+st.set_page_config(page_title="Kerala Academic Counsellor", layout="centered")
 st.title("🎓 Kerala Career Guidance AI")
 
 if "messages" not in st.session_state:
@@ -111,21 +111,23 @@ if "messages" not in st.session_state:
 if "user_info" not in st.session_state:
     st.session_state.user_info = False
 
+# Collect Lead Info First
 if not st.session_state.user_info:
-    with st.form("lead"):
+    with st.form("lead_form"):
         name = st.text_input("Your Name")
         phone = st.text_input("Phone Number")
-        submit = st.form_submit_button("Start Chat")
+        submitted = st.form_submit_button("Start Chat")
 
-        if submit:
+        if submitted:
             if name and phone:
                 st.session_state.name = name
                 st.session_state.phone = phone
                 st.session_state.user_info = True
                 st.rerun()
             else:
-                st.error("Fill all fields")
+                st.error("Please enter all details")
 
+# Chat Interface
 if st.session_state.user_info:
 
     for msg in st.session_state.messages:
@@ -136,37 +138,43 @@ if st.session_state.user_info:
 
     if user_input:
 
+        # Show user message
         st.session_state.messages.append({"role": "user", "content": user_input})
-
         with st.chat_message("user"):
             st.markdown(user_input)
 
+        # Emotion detection
         emotion = detect_emotion(user_input)
-        reply = generate_response(user_input, emotion)
+
+        # AI Response
+        bot_reply = generate_response(user_input, emotion)
+
+        # Lead priority
         lead_status = lead_temperature(emotion)
 
-        st.session_state.messages.append({"role": "assistant", "content": reply})
-
+        # Show bot reply
+        st.session_state.messages.append({"role": "assistant", "content": bot_reply})
         with st.chat_message("assistant"):
-            st.markdown(reply)
+            st.markdown(bot_reply)
             st.info(f"Lead Priority: {lead_status}")
 
-        # Save full conversation as JSON
+        # Save entire conversation
         data = {
             "name": st.session_state.name,
             "phone": st.session_state.phone,
             "conversation": st.session_state.messages,
             "last_emotion": emotion,
-            "lead_status": lead_status
+            "lead_status": lead_status,
+            "created_at": datetime.utcnow().isoformat()
         }
 
         upsert_chat(st.session_state.phone, data)
 
-# ---------------- ADMIN ---------------- #
+# ---------------- ADMIN PANEL ---------------- #
 
 st.markdown("---")
 if st.checkbox("Admin Login"):
-    pin = st.text_input("Enter PIN", type="password")
+    pin = st.text_input("Enter 4-digit PIN", type="password")
     if pin == "8948":
         url = f"{SUPABASE_URL}/rest/v1/chats?select=*"
         response = requests.get(url, headers=supabase_headers)
