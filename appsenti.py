@@ -7,13 +7,13 @@ from io import BytesIO
 # -----------------------------
 # PAGE CONFIG
 # -----------------------------
-st.set_page_config(page_title="Malayalam Sentiment Analyzer")
-st.title("Malayalam Sentiment Analysis App")
+st.set_page_config(page_title="Sentiment Analyzer")
+st.title("English + Manglish Sentiment Analysis App")
 
 # -----------------------------
-# HUGGING FACE API
+# HUGGING FACE ROUTER API
 # -----------------------------
-API_URL = "https://router.huggingface.co/hf-inference/models/l3cube-pune/malayalam-sentiment-analysis"
+API_URL = "https://router.huggingface.co/hf-inference/models/cardiffnlp/twitter-xlm-roberta-base-sentiment"
 
 headers = {
     "Authorization": f"Bearer {st.secrets['HF_TOKEN']}",
@@ -42,26 +42,35 @@ if "admin_authenticated" not in st.session_state:
     st.session_state.admin_authenticated = False
 
 # -----------------------------
-# USER INPUT SECTION
+# USER SUBMISSION SECTION
 # -----------------------------
 st.subheader("Submit Your Review")
 
-name = st.text_input("Enter Your Name")
-review = st.text_area("Enter Your Review (Malayalam or English)")
+name = st.text_input("Enter Your Name", key="name_input")
+review = st.text_area("Enter Your Review (English / Manglish)", key="review_input")
 
 if st.button("Submit Review"):
 
     if name and review:
 
         with st.spinner("Analyzing sentiment..."):
+
             output = query({"inputs": review})
 
         if output is None:
             st.stop()
 
         try:
-            sentiment = output[0][0]["label"]
-            confidence = round(output[0][0]["score"], 4)
+            # Model returns list of labels sorted by score
+            result = output[0]
+
+            sentiment = result["label"]
+            confidence = round(result["score"], 4)
+
+            # Clean label format
+            sentiment = sentiment.replace("LABEL_0", "Negative") \
+                                 .replace("LABEL_1", "Neutral") \
+                                 .replace("LABEL_2", "Positive")
 
             new_row = pd.DataFrame({
                 "Timestamp": [datetime.now()],
@@ -78,9 +87,7 @@ if st.button("Submit Review"):
 
             st.success("Review submitted successfully!")
 
-            # Clear inputs and refresh page
-            st.session_state["name"] = ""
-            st.session_state["review"] = ""
+            # Auto refresh
             st.rerun()
 
         except Exception:
@@ -91,28 +98,26 @@ if st.button("Submit Review"):
         st.warning("Please enter both Name and Review.")
 
 # -----------------------------
-# ADMIN SECTION
+# ADMIN LOGIN SECTION
 # -----------------------------
 st.markdown("---")
 st.subheader("Admin Access")
 
-admin_option = st.checkbox("Login as Admin")
+if not st.session_state.admin_authenticated:
 
-if admin_option and not st.session_state.admin_authenticated:
+    if st.checkbox("Login as Admin"):
+        pin = st.text_input("Enter 4-digit PIN", type="password")
 
-    pin = st.text_input("Enter 4-digit PIN", type="password")
-
-    if st.button("Login"):
-
-        if pin == "8948":
-            st.session_state.admin_authenticated = True
-            st.success("Admin Access Granted")
-            st.rerun()
-        else:
-            st.error("Incorrect PIN")
+        if st.button("Login"):
+            if pin == "8948":
+                st.session_state.admin_authenticated = True
+                st.success("Admin Access Granted")
+                st.rerun()
+            else:
+                st.error("Incorrect PIN")
 
 # -----------------------------
-# SHOW DATA ONLY IF ADMIN
+# ADMIN DASHBOARD
 # -----------------------------
 if st.session_state.admin_authenticated:
 
@@ -123,20 +128,20 @@ if st.session_state.admin_authenticated:
 
         st.dataframe(st.session_state.data)
 
-        # Excel export
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        # Create Excel file in memory
+        output_excel = BytesIO()
+        with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
             st.session_state.data.to_excel(
                 writer,
                 index=False,
                 sheet_name="Sentiment Results"
             )
 
-        output.seek(0)
+        output_excel.seek(0)
 
         st.download_button(
             label="Download Excel File",
-            data=output,
+            data=output_excel,
             file_name="sentiment_results.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
