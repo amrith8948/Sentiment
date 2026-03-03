@@ -46,31 +46,32 @@ if "admin_authenticated" not in st.session_state:
 # -----------------------------
 st.subheader("Submit Your Review")
 
-name = st.text_input("Enter Your Name", key="name_input")
-review = st.text_area("Enter Your Review (English / Manglish)", key="review_input")
+name = st.text_input("Enter Your Name")
+review = st.text_area("Enter Your Review (English / Manglish)")
 
 if st.button("Submit Review"):
 
     if name and review:
 
         with st.spinner("Analyzing sentiment..."):
-
             output = query({"inputs": review})
 
         if output is None:
             st.stop()
 
         try:
-            # Model returns list of labels sorted by score
-            result = output[0]
+            # Extract predictions list
+            predictions = output[0]
 
-            sentiment = result["label"]
-            confidence = round(result["score"], 4)
+            # Sort by highest confidence
+            best_prediction = sorted(
+                predictions,
+                key=lambda x: x["score"],
+                reverse=True
+            )[0]
 
-            # Clean label format
-            sentiment = sentiment.replace("LABEL_0", "Negative") \
-                                 .replace("LABEL_1", "Neutral") \
-                                 .replace("LABEL_2", "Positive")
+            sentiment = best_prediction["label"].capitalize()
+            confidence = round(best_prediction["score"], 4)
 
             new_row = pd.DataFrame({
                 "Timestamp": [datetime.now()],
@@ -85,7 +86,8 @@ if st.button("Submit Review"):
                 ignore_index=True
             )
 
-            st.success("Review submitted successfully!")
+            st.success(f"Sentiment: {sentiment}")
+            st.info(f"Confidence: {confidence}")
 
             # Auto refresh
             st.rerun()
@@ -128,7 +130,7 @@ if st.session_state.admin_authenticated:
 
         st.dataframe(st.session_state.data)
 
-        # Create Excel file in memory
+        # Create Excel in memory
         output_excel = BytesIO()
         with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
             st.session_state.data.to_excel(
