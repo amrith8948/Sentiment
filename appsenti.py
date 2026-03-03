@@ -1,48 +1,95 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime
 from io import BytesIO
 
 # -----------------------------
 # PAGE CONFIG
 # -----------------------------
-st.set_page_config(page_title="Sentiment Analyzer")
+st.set_page_config(page_title="Sentiment Analyzer", layout="centered")
 st.title("English + Manglish Sentiment Analysis App")
 
 # -----------------------------
-# HUGGING FACE ROUTER API
+# LOAD SECRETS
 # -----------------------------
-API_URL = "https://router.huggingface.co/hf-inference/models/cardiffnlp/twitter-xlm-roberta-base-sentiment"
+HF_TOKEN = st.secrets["HF_TOKEN"]
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
-headers = {
-    "Authorization": f"Bearer {st.secrets['HF_TOKEN']}",
+# -----------------------------
+# HUGGING FACE MODEL
+# -----------------------------
+MODEL_URL = "https://router.huggingface.co/hf-inference/models/cardiffnlp/twitter-xlm-roberta-base-sentiment"
+
+hf_headers = {
+    "Authorization": f"Bearer {HF_TOKEN}",
     "Content-Type": "application/json"
 }
 
-def query(payload):
-    response = requests.post(API_URL, headers=headers, json=payload)
-
-    if response.status_code != 200:
-        st.error(f"API Error: {response.status_code}")
-        st.write(response.text)
-        return None
-
-    return response.json()
-
-# -----------------------------
-# SESSION STATE INITIALIZATION
-# -----------------------------
-if "data" not in st.session_state:
-    st.session_state.data = pd.DataFrame(
-        columns=["Timestamp", "Name", "Review", "Sentiment", "Confidence"]
+def analyze_sentiment(text):
+    response = requests.post(
+        MODEL_URL,
+        headers=hf_headers,
+        json={"inputs": text}
     )
 
-if "admin_authenticated" not in st.session_state:
-    st.session_state.admin_authenticated = False
+    if response.status_code != 200:
+        st.error(f"Model API Error: {response.status_code}")
+        st.write(response.text)
+        return None, None
+
+    try:
+        output = response.json()[0]
+        best = sorted(output, key=lambda x: x["score"], reverse=True)[0]
+        return best["label"].capitalize(), round(best["score"], 4)
+    except Exception:
+        st.error("Unexpected model response format.")
+        st.write(response.text)
+        return None, None
 
 # -----------------------------
-# USER SUBMISSION SECTION
+# SUPABASE CONFIG
+# -----------------------------
+supabase_headers = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json",
+    "Prefer": "return=minimal"
+}
+
+def insert_review(data):
+    url = f"{SUPABASE_URL}/rest/v1/reviews"
+
+    response = requests.post(
+        url,
+        headers=supabase_headers,
+        json=data
+    )
+
+    if response.status_code not in [200, 201]:
+        st.error(f"Supabase Insert Error: {response.status_code}")
+        st.write(response.text)
+        return False
+    return True
+
+
+def fetch_reviews():
+    url = f"{SUPABASE_URL}/rest/v1/reviews?select=*"
+
+    response = requests.get(
+        url,
+        headers=supabase_headers
+    )
+
+    if response.status_code != 200:
+        st.error(f"Supabase Fetch Error: {response.status_code}")
+        st.write(response.text)
+        return pd.DataFrame()
+
+    return pd.DataFrame(response.json())
+
+# -----------------------------
+# USER INPUT SECTION
 # -----------------------------
 st.subheader("Submit Your Review")
 
@@ -54,66 +101,45 @@ if st.button("Submit Review"):
     if name and review:
 
         with st.spinner("Analyzing sentiment..."):
-            output = query({"inputs": review})
+            sentiment, confidence = analyze_sentiment(review)
 
-        if output is None:
-            st.stop()
+        if sentiment:
 
-        try:
-            # Extract predictions list
-            predictions = output[0]
+            data = {
+                "name": name,
+                "review": review,
+                "sentiment": sentiment,
+                "confidence": confidence
+            }
 
-            # Sort by highest confidence
-            best_prediction = sorted(
-                predictions,
-                key=lambda x: x["score"],
-                reverse=True
-            )[0]
+            success = insert_review(data)
 
-            sentiment = best_prediction["label"].capitalize()
-            confidence = round(best_prediction["score"], 4)
-
-            new_row = pd.DataFrame({
-                "Timestamp": [datetime.now()],
-                "Name": [name],
-                "Review": [review],
-                "Sentiment": [sentiment],
-                "Confidence": [confidence]
-            })
-
-            st.session_state.data = pd.concat(
-                [st.session_state.data, new_row],
-                ignore_index=True
-            )
-
-            st.success(f"Sentiment: {sentiment}")
-            st.info(f"Confidence: {confidence}")
-
-            # Auto refresh
-            st.rerun()
-
-        except Exception:
-            st.error("Unexpected API response format")
-            st.write(output)
+            if success:
+                st.success(f"Sentiment: {sentiment}")
+                st.info(f"Confidence: {confidence}")
+                st.rerun()
 
     else:
         st.warning("Please enter both Name and Review.")
 
 # -----------------------------
-# ADMIN LOGIN SECTION
+# ADMIN SECTION
 # -----------------------------
 st.markdown("---")
 st.subheader("Admin Access")
 
-if not st.session_state.admin_authenticated:
+if "admin_logged_in" not in st.session_state:
+    st.session_state.admin_logged_in = False
+
+if not st.session_state.admin_logged_in:
 
     if st.checkbox("Login as Admin"):
         pin = st.text_input("Enter 4-digit PIN", type="password")
 
         if st.button("Login"):
             if pin == "8948":
-                st.session_state.admin_authenticated = True
-                st.success("Admin Access Granted")
+                st.session_state.admin_logged_in = True
+                st.success("Admin access granted")
                 st.rerun()
             else:
                 st.error("Incorrect PIN")
@@ -121,29 +147,27 @@ if not st.session_state.admin_authenticated:
 # -----------------------------
 # ADMIN DASHBOARD
 # -----------------------------
-if st.session_state.admin_authenticated:
+if st.session_state.admin_logged_in:
 
     st.markdown("---")
     st.subheader("Admin Dashboard")
 
-    if not st.session_state.data.empty:
+    df = fetch_reviews()
 
-        st.dataframe(st.session_state.data)
+    if not df.empty:
 
-        # Create Excel in memory
-        output_excel = BytesIO()
-        with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
-            st.session_state.data.to_excel(
-                writer,
-                index=False,
-                sheet_name="Sentiment Results"
-            )
+        st.dataframe(df, use_container_width=True)
 
-        output_excel.seek(0)
+        # Excel export
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False)
+
+        output.seek(0)
 
         st.download_button(
             label="Download Excel File",
-            data=output_excel,
+            data=output,
             file_name="sentiment_results.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
@@ -152,5 +176,5 @@ if st.session_state.admin_authenticated:
         st.info("No data available yet.")
 
     if st.button("Logout Admin"):
-        st.session_state.admin_authenticated = False
+        st.session_state.admin_logged_in = False
         st.rerun()
