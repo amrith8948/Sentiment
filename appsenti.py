@@ -2,7 +2,6 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime
-import os
 
 # -----------------------------
 # PAGE CONFIG
@@ -12,13 +11,14 @@ st.title("Malayalam Sentiment Analysis App")
 st.write("Analyze reviews and export results to Excel")
 
 # -----------------------------
-# HUGGING FACE API
+# UPDATED HUGGING FACE ROUTER API
 # -----------------------------
 
-API_URL = "https://api-inference.huggingface.co/models/abhinand/malayalam-llama-7b-instruct"
+API_URL = "https://router.huggingface.co/hf-inference/models/abhinand/malayalam-llama-7b-instruct"
 
 headers = {
-    "Authorization": f"Bearer {st.secrets['HF_TOKEN']}"
+    "Authorization": f"Bearer {st.secrets['HF_TOKEN']}",
+    "Content-Type": "application/json"
 }
 
 def query(payload):
@@ -26,7 +26,7 @@ def query(payload):
     return response.json()
 
 # -----------------------------
-# SESSION STATE (STORE DATA)
+# SESSION STATE
 # -----------------------------
 if "data" not in st.session_state:
     st.session_state.data = pd.DataFrame(
@@ -36,7 +36,6 @@ if "data" not in st.session_state:
 # -----------------------------
 # USER INPUT
 # -----------------------------
-
 name = st.text_input("Enter Your Name")
 review = st.text_area("Enter Your Review (Malayalam or English)")
 
@@ -54,10 +53,16 @@ Review: {review}
 Answer:
 """
 
-            output = query({"inputs": prompt})
+            output = query({
+                "inputs": prompt,
+                "parameters": {
+                    "max_new_tokens": 10,
+                    "temperature": 0.2
+                }
+            })
 
             if isinstance(output, list):
-                sentiment = output[0]["generated_text"]
+                sentiment = output[0]["generated_text"].strip()
             else:
                 sentiment = str(output)
 
@@ -79,15 +84,13 @@ Answer:
         st.warning("Please enter both Name and Review.")
 
 # -----------------------------
-# DISPLAY TABLE
+# DISPLAY TABLE + DOWNLOAD
 # -----------------------------
-
 if not st.session_state.data.empty:
 
     st.subheader("Collected Data")
     st.dataframe(st.session_state.data)
 
-    # Convert to Excel
     excel_file = "sentiment_results.xlsx"
     st.session_state.data.to_excel(excel_file, index=False)
 
