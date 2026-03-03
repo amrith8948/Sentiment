@@ -1,99 +1,22 @@
 import streamlit as st
 import requests
 import pandas as pd
-from io import BytesIO
+from datetime import datetime
 
-# -----------------------------
-# PAGE CONFIG
-# -----------------------------
-st.set_page_config(page_title="Academic Counsellor AI", layout="centered")
-st.title("🎓 AI Academic Counsellor")
-st.markdown("Helping you choose the right professional course – ACCA | CA | CMA")
+# -------------------------------
+# CONFIG
+# -------------------------------
 
-# -----------------------------
-# LOAD SECRETS
-# -----------------------------
 HF_TOKEN = st.secrets["HF_TOKEN"]
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
-# -----------------------------
-# EMOTION MODEL
-# -----------------------------
-MODEL_URL = "https://router.huggingface.co/hf-inference/models/j-hartmann/emotion-english-distilroberta-base"
+MODEL = "j-hartmann/emotion-english-distilroberta-base"
 
-hf_headers = {
-    "Authorization": f"Bearer {HF_TOKEN}",
-    "Content-Type": "application/json"
-}
+# -------------------------------
+# SUPABASE HEADERS
+# -------------------------------
 
-def analyze_emotion(text):
-    response = requests.post(
-        MODEL_URL,
-        headers=hf_headers,
-        json={"inputs": text}
-    )
-
-    if response.status_code != 200:
-        return "Neutral", 0.0
-
-    output = response.json()[0]
-    best = sorted(output, key=lambda x: x["score"], reverse=True)[0]
-    return best["label"].capitalize(), round(best["score"], 4)
-
-# -----------------------------
-# COUNSELLOR RESPONSE ENGINE
-# -----------------------------
-def generate_response(emotion, user_input):
-
-    base_pitch = (
-        "\n\nAt our institute, we provide:\n"
-        "✔ Personal mentorship\n"
-        "✔ Expert faculty\n"
-        "✔ Structured roadmap\n"
-        "✔ Placement guidance\n\n"
-        "Would you like a free career counselling session?"
-    )
-
-    if emotion == "Fear":
-        return (
-            "It's completely normal to feel uncertain about your future. "
-            "Professional courses like ACCA (global), CA (India), or CMA "
-            "provide clear career paths and strong job security."
-            + base_pitch
-        )
-
-    elif emotion == "Sadness":
-        return (
-            "I understand this phase can feel overwhelming. "
-            "The right professional qualification can change your confidence and future."
-            + base_pitch
-        )
-
-    elif emotion == "Anger":
-        return (
-            "I’m sorry if your academic journey has been frustrating. "
-            "With the right mentorship, courses like ACCA, CA, or CMA become structured and manageable."
-            + base_pitch
-        )
-
-    elif emotion == "Joy":
-        return (
-            "That’s great to hear! If you're ambitious, ACCA, CA, or CMA "
-            "can help you build a high-paying global career."
-            + base_pitch
-        )
-
-    else:
-        return (
-            "Are you currently exploring career options after +2 or graduation? "
-            "ACCA, CA, and CMA are highly respected professional finance qualifications."
-            + base_pitch
-        )
-
-# -----------------------------
-# SUPABASE CONFIG
-# -----------------------------
 supabase_headers = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -101,118 +24,167 @@ supabase_headers = {
     "Prefer": "return=minimal"
 }
 
-def insert_chat(data):
-    url = f"{SUPABASE_URL}/rest/v1/chats"
-    requests.post(url, headers=supabase_headers, json=data)
+# -------------------------------
+# EMOTION DETECTION
+# -------------------------------
 
-def fetch_chats():
-    url = f"{SUPABASE_URL}/rest/v1/chats?select=*"
-    response = requests.get(url, headers=supabase_headers)
-    if response.status_code == 200:
-        return pd.DataFrame(response.json())
-    return pd.DataFrame()
+def detect_emotion(text):
+    API_URL = f"https://router.huggingface.co/hf-inference/models/{MODEL}"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    
+    payload = {"inputs": text}
 
-# -----------------------------
-# SESSION STATE
-# -----------------------------
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+    response = requests.post(API_URL, headers=headers, json=payload)
 
-if "lead_name" not in st.session_state:
-    st.session_state.lead_name = None
+    result = response.json()
 
-if "lead_phone" not in st.session_state:
-    st.session_state.lead_phone = None
+    if isinstance(result, list):
+        emotions = result[0]
+        top_emotion = max(emotions, key=lambda x: x['score'])
+        return top_emotion['label']
+    
+    return "neutral"
 
-if "interested_course" not in st.session_state:
-    st.session_state.interested_course = None
+# -------------------------------
+# LEAD TEMPERATURE
+# -------------------------------
 
-# -----------------------------
-# CHAT INTERFACE
-# -----------------------------
-user_input = st.chat_input("Ask me about ACCA, CA, CMA or your career doubts...")
+def lead_temperature(emotion):
+    if emotion in ["fear", "sadness"]:
+        return "HOT 🔥"
+    elif emotion == "joy":
+        return "WARM 🌤"
+    else:
+        return "COLD ❄"
 
-if user_input:
+# -------------------------------
+# BOT RESPONSE (KERALA FOCUSED)
+# -------------------------------
 
-    emotion, confidence = analyze_emotion(user_input)
-    bot_reply = generate_response(emotion, user_input)
+def generate_response(emotion):
 
-    st.session_state.chat_history.append(("user", user_input))
-    st.session_state.chat_history.append(("assistant", bot_reply))
+    closing = (
+        "\n\n🎓 We offer:\n"
+        "✔ Small Batch Personal Mentorship\n"
+        "✔ Malayalam + English Support\n"
+        "✔ First Attempt Strategy\n"
+        "✔ Placement Guidance in Kerala & GCC\n\n"
+        "Would you like to book a FREE 15-minute career guidance call?"
+    )
 
-    insert_chat({
-        "user_message": user_input,
-        "detected_emotion": emotion,
-        "confidence": confidence,
-        "bot_response": bot_reply,
-        "lead_name": st.session_state.lead_name,
-        "lead_phone": st.session_state.lead_phone,
-        "interested_course": st.session_state.interested_course
-    })
-
-# Display chat
-for role, message in st.session_state.chat_history:
-    with st.chat_message(role):
-        st.write(message)
-
-# -----------------------------
-# LEAD CAPTURE SECTION
-# -----------------------------
-st.markdown("---")
-st.subheader("📞 Get Free Counselling")
-
-with st.form("lead_form"):
-    name = st.text_input("Your Name")
-    phone = st.text_input("Phone Number")
-    course = st.selectbox("Interested Course", ["ACCA", "CA", "CMA", "Not Sure"])
-
-    submitted = st.form_submit_button("Request Call Back")
-
-    if submitted:
-        st.session_state.lead_name = name
-        st.session_state.lead_phone = phone
-        st.session_state.interested_course = course
-
-        st.success("Our counsellor will contact you shortly!")
-
-# -----------------------------
-# ADMIN SECTION
-# -----------------------------
-st.markdown("---")
-st.subheader("Admin Access")
-
-if "admin" not in st.session_state:
-    st.session_state.admin = False
-
-if not st.session_state.admin:
-    if st.checkbox("Login as Admin"):
-        pin = st.text_input("Enter PIN", type="password")
-        if st.button("Login"):
-            if pin == "8948":
-                st.session_state.admin = True
-                st.rerun()
-            else:
-                st.error("Incorrect PIN")
-
-if st.session_state.admin:
-    st.subheader("📊 Leads & Chat Logs")
-
-    df = fetch_chats()
-    if not df.empty:
-        st.dataframe(df, use_container_width=True)
-
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False)
-        output.seek(0)
-
-        st.download_button(
-            "Download Excel",
-            output,
-            "leads_and_chats.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    if emotion == "fear":
+        return (
+            "I understand career confusion is stressful.\n\n"
+            "Many Kerala students after +2 feel unsure between ACCA, CA, or CMA.\n\n"
+            "ACCA → Global career 🌍\n"
+            "CA → Strong India recognition 🇮🇳\n"
+            "CMA → Corporate finance growth 💼\n\n"
+            "With the right mentorship, the path becomes clear."
+            + closing
         )
 
-    if st.button("Logout"):
-        st.session_state.admin = False
-        st.rerun()
+    elif emotion == "sadness":
+        return (
+            "It sounds like you're feeling confused or low.\n\n"
+            "Many successful students once felt the same.\n"
+            "Proper mentorship changes everything."
+            + closing
+        )
+
+    elif emotion == "anger":
+        return (
+            "I understand frustration — maybe due to lack of guidance.\n\n"
+            "With structured preparation and mentor support, even tough courses become manageable."
+            + closing
+        )
+
+    elif emotion == "joy":
+        return (
+            "That confidence is powerful! 🚀\n\n"
+            "Professional courses like ACCA, CA, and CMA can multiply your career growth."
+            + closing
+        )
+
+    else:
+        return (
+            "Are you currently after +2 or graduation?\n\n"
+            "Finance professional courses open strong career paths."
+            + closing
+        )
+
+# -------------------------------
+# SAVE TO SUPABASE
+# -------------------------------
+
+def insert_chat(data):
+    url = f"{SUPABASE_URL}/rest/v1/chats"
+    response = requests.post(url, headers=supabase_headers, json=data)
+    return response.status_code in [200, 201]
+
+# -------------------------------
+# UI
+# -------------------------------
+
+st.set_page_config(page_title="Kerala Academic Counsellor", layout="centered")
+
+st.title("🎓 Kerala Career Guidance AI")
+st.write("Chat with our Academic Counsellor for ACCA / CA / CMA")
+
+name = st.text_input("Your Name")
+phone = st.text_input("Phone Number")
+message = st.text_area("Ask your career question")
+
+if st.button("Send Message"):
+
+    if name and phone and message:
+
+        emotion = detect_emotion(message)
+        bot_reply = generate_response(emotion)
+        lead_status = lead_temperature(emotion)
+
+        data = {
+            "name": name,
+            "phone": phone,
+            "message": message,
+            "emotion": emotion,
+            "bot_reply": bot_reply,
+            "lead_status": lead_status,
+            "created_at": datetime.utcnow().isoformat()
+        }
+
+        success = insert_chat(data)
+
+        if success:
+            st.success("Message Sent ✅")
+            st.write(f"### 🤖 Counsellor:")
+            st.write(bot_reply)
+            st.info(f"Lead Priority: {lead_status}")
+            st.rerun()
+        else:
+            st.error("Error saving data")
+
+    else:
+        st.error("Please fill all fields")
+
+# -------------------------------
+# ADMIN PANEL
+# -------------------------------
+
+st.markdown("---")
+admin = st.checkbox("Admin Login")
+
+if admin:
+    pin = st.text_input("Enter 4-digit PIN", type="password")
+
+    if pin == "8948":
+
+        st.subheader("📊 Admissions Data")
+
+        url = f"{SUPABASE_URL}/rest/v1/chats?select=*"
+        response = requests.get(url, headers=supabase_headers)
+
+        if response.status_code == 200:
+            df = pd.DataFrame(response.json())
+            st.dataframe(df)
+        else:
+            st.error("Failed to fetch data")
