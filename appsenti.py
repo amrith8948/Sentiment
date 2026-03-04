@@ -6,12 +6,11 @@ import json
 
 # ---------------- CONFIG ---------------- #
 
-HF_TOKEN = st.secrets["HF_TOKEN"]
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
-EMOTION_MODEL = "j-hartmann/emotion-english-distilroberta-base"
-GEN_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
+GROQ_MODEL = "llama3-70b-8192"
 
 supabase_headers = {
     "apikey": SUPABASE_KEY,
@@ -19,72 +18,70 @@ supabase_headers = {
     "Content-Type": "application/json"
 }
 
-# ---------------- EMOTION DETECTION ---------------- #
-
-def detect_emotion(text):
-    API_URL = f"https://router.huggingface.co/hf-inference/models/{EMOTION_MODEL}"
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    payload = {"inputs": text}
-
-    response = requests.post(API_URL, headers=headers, json=payload)
-    result = response.json()
-
-    if isinstance(result, list):
-        emotions = result[0]
-        top = max(emotions, key=lambda x: x["score"])
-        return top["label"]
-
-    return "neutral"
-
 # ---------------- LEAD TEMPERATURE ---------------- #
 
-def lead_temperature(emotion):
-    if emotion in ["fear", "sadness"]:
+def lead_temperature(message):
+    text = message.lower()
+
+    if any(word in text for word in ["scared", "fear", "confused", "worried"]):
         return "HOT 🔥"
-    elif emotion == "joy":
+    elif any(word in text for word in ["interested", "planning", "thinking"]):
         return "WARM 🌤"
-    return "COLD ❄"
+    else:
+        return "COLD ❄"
 
-# ---------------- AI GENERATED RESPONSE ---------------- #
+# ---------------- GROQ AI RESPONSE ---------------- #
 
-def generate_response(user_input, emotion):
+def generate_response(user_input):
 
-    API_URL = f"https://router.huggingface.co/hf-inference/models/{GEN_MODEL}"
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    url = "https://api.groq.com/openai/v1/chat/completions"
 
-    system_prompt = f"""
-You are a highly professional academic counsellor from Kerala.
-You help students decide between ACCA, CA, and CMA.
-
-Student Emotion: {emotion}
-
-Instructions:
-- Answer specifically to the student question.
-- Be conversational and natural.
-- Use Kerala context where relevant.
-- Encourage booking a free career counselling call.
-- Keep response under 180 words.
-- Do NOT repeat the same template.
-"""
-
-    full_prompt = f"<s>[INST] {system_prompt}\nStudent Question: {user_input} [/INST]"
-
-    payload = {
-        "inputs": full_prompt,
-        "parameters": {
-            "max_new_tokens": 200,
-            "temperature": 0.8
-        }
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
     }
 
-    response = requests.post(API_URL, headers=headers, json=payload)
-    result = response.json()
+    system_prompt = """
+You are a highly professional academic counsellor from Kerala.
+You help students choose between ACCA, CA, and CMA.
 
-    if isinstance(result, list):
-        text = result[0]["generated_text"]
-        return text.split("[/INST]")[-1].strip()
+Rules:
+- Be conversational and natural.
+- Answer specifically to the student question.
+- Use Kerala context.
+- Be persuasive but not pushy.
+- Encourage booking a FREE career counselling call.
+- Keep response under 180 words.
+"""
 
-    return "Could you please clarify your question?"
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_input}
+        ],
+        "temperature": 0.8,
+        "max_tokens": 300
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+
+        if response.status_code != 200:
+            return fallback_reply()
+
+        result = response.json()
+        return result["choices"][0]["message"]["content"]
+
+    except Exception:
+        return fallback_reply()
+
+def fallback_reply():
+    return (
+        "ACCA, CA, and CMA are strong professional courses. "
+        "The right option depends on your goals.\n\n"
+        "Would you like to book a FREE career guidance call?"
+    )
 
 # ---------------- SUPABASE UPSERT ---------------- #
 
@@ -138,32 +135,24 @@ if st.session_state.user_info:
 
     if user_input:
 
-        # Show user message
         st.session_state.messages.append({"role": "user", "content": user_input})
+
         with st.chat_message("user"):
             st.markdown(user_input)
 
-        # Emotion detection
-        emotion = detect_emotion(user_input)
+        bot_reply = generate_response(user_input)
+        lead_status = lead_temperature(user_input)
 
-        # AI Response
-        bot_reply = generate_response(user_input, emotion)
-
-        # Lead priority
-        lead_status = lead_temperature(emotion)
-
-        # Show bot reply
         st.session_state.messages.append({"role": "assistant", "content": bot_reply})
+
         with st.chat_message("assistant"):
             st.markdown(bot_reply)
             st.info(f"Lead Priority: {lead_status}")
 
-        # Save entire conversation
         data = {
             "name": st.session_state.name,
             "phone": st.session_state.phone,
             "conversation": st.session_state.messages,
-            "last_emotion": emotion,
             "lead_status": lead_status,
             "created_at": datetime.utcnow().isoformat()
         }
@@ -181,3 +170,5 @@ if st.checkbox("Admin Login"):
         if response.status_code == 200:
             df = pd.DataFrame(response.json())
             st.dataframe(df)
+        else:
+            st.error("Failed to fetch data")
