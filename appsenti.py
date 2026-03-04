@@ -1,38 +1,76 @@
 import streamlit as st
 import requests
-import pandas as pd
-from datetime import datetime
 import json
+from datetime import datetime
 
-# ---------------- CONFIG ---------------- #
-
+# -------------------------------
+# CONFIG
+# -------------------------------
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
-GROQ_MODEL = "llama3-70b-8192"
+# -------------------------------
+# PAGE SETTINGS
+# -------------------------------
+st.set_page_config(page_title="Kerala Career Guidance AI", page_icon="🎓")
+st.title("🎓 Kerala Career Guidance AI")
+st.caption("AI Academic Counsellor for ACCA | CA | CMA")
 
-supabase_headers = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json"
-}
+# -------------------------------
+# SESSION STATE
+# -------------------------------
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
-# ---------------- LEAD TEMPERATURE ---------------- #
+if "student_name" not in st.session_state:
+    st.session_state.student_name = ""
 
-def lead_temperature(message):
-    text = message.lower()
+if "session_saved" not in st.session_state:
+    st.session_state.session_saved = False
 
-    if any(word in text for word in ["scared", "fear", "confused", "worried"]):
-        return "HOT 🔥"
-    elif any(word in text for word in ["interested", "planning", "thinking"]):
-        return "WARM 🌤"
-    else:
-        return "COLD ❄"
+# -------------------------------
+# NAME INPUT (FIRST STEP)
+# -------------------------------
+if not st.session_state.student_name:
+    name = st.text_input("Enter your name")
+    if st.button("Start Chat"):
+        if name.strip():
+            st.session_state.student_name = name
+            st.rerun()
+    st.stop()
 
-# ---------------- GROQ AI RESPONSE ---------------- #
+# -------------------------------
+# EMOTION DETECTION (HF FREE API)
+# -------------------------------
+def detect_emotion(text):
+    url = "https://api-inference.huggingface.co/models/SamLowe/roberta-base-go_emotions"
+    headers = {"Content-Type": "application/json"}
 
-def generate_response(user_input):
+    payload = {"inputs": text}
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+
+        if response.status_code != 200:
+            return "neutral"
+
+        result = response.json()
+
+        if isinstance(result, list):
+            scores = result[0]
+            top = max(scores, key=lambda x: x["score"])
+            return top["label"]
+
+        return "neutral"
+
+    except:
+        return "neutral"
+
+# -------------------------------
+# GROQ RESPONSE GENERATION
+# -------------------------------
+def generate_response(user_input, emotion):
 
     url = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -41,119 +79,113 @@ def generate_response(user_input):
         "Content-Type": "application/json"
     }
 
+    system_prompt = f"""
+You are a highly trained academic counsellor from Kerala.
+
+Student emotion: {emotion}
+
+Instructions:
+- Speak naturally like a Kerala mentor
+- Adapt tone based on emotion
+- Promote ACCA, CA, CMA smartly
+- DO NOT repeat same reply
+- Keep under 150 words
+- Ask one engaging follow-up question
+- Be persuasive but not pushy
+"""
+
+    # Include chat memory
+    messages = [
+        {"role": "system", "content": system_prompt.strip()}
+    ]
+
+    for msg in st.session_state.chat_history[-6:]:
+        messages.append(msg)
+
+    messages.append({"role": "user", "content": user_input.strip()})
+
     payload = {
         "model": "llama3-70b-8192",
-        "messages": [
-            {"role": "system", "content": "You are a helpful academic counsellor from Kerala."},
-            {"role": "user", "content": user_input}
-        ],
-        "temperature": 0.8,
-        "max_tokens": 300
+        "messages": messages,
+        "temperature": 0.9,
+        "top_p": 0.9,
+        "max_tokens": 250
     }
 
-    response = requests.post(url, headers=headers, json=payload)
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
 
-    st.write("STATUS CODE:", response.status_code)
-    st.write("RAW RESPONSE:", response.text)
+        if response.status_code != 200:
+            return "That’s interesting. Tell me more about your career goals."
 
-    if response.status_code == 200:
         result = response.json()
+
         return result["choices"][0]["message"]["content"]
 
-    return "API Failed"
-def fallback_reply():
-    return (
-        "ACCA, CA, and CMA are strong professional courses. "
-        "The right option depends on your goals.\n\n"
-        "Would you like to book a FREE career guidance call?"
-    )
+    except:
+        return "I’d love to guide you properly. What are you currently studying?"
 
-# ---------------- SUPABASE UPSERT ---------------- #
+# -------------------------------
+# SAVE TO SUPABASE (ONE ROW PER CHAT)
+# -------------------------------
+def save_chat_to_supabase(final_emotion):
 
-def upsert_chat(phone, data):
+    if st.session_state.session_saved:
+        return
 
-    check_url = f"{SUPABASE_URL}/rest/v1/chats?phone=eq.{phone}"
-    response = requests.get(check_url, headers=supabase_headers)
+    url = f"{SUPABASE_URL}/rest/v1/admissions_chat"
 
-    if response.status_code == 200 and response.json():
-        update_url = f"{SUPABASE_URL}/rest/v1/chats?phone=eq.{phone}"
-        requests.patch(update_url, headers=supabase_headers, json=data)
-    else:
-        insert_url = f"{SUPABASE_URL}/rest/v1/chats"
-        requests.post(insert_url, headers=supabase_headers, json=data)
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal"
+    }
 
-# ---------------- STREAMLIT UI ---------------- #
+    data = {
+        "student_name": st.session_state.student_name,
+        "full_chat": st.session_state.chat_history,
+        "last_emotion": final_emotion
+    }
 
-st.set_page_config(page_title="Kerala Academic Counsellor", layout="centered")
-st.title("🎓 Kerala Career Guidance AI")
+    try:
+        requests.post(url, headers=headers, json=data)
+        st.session_state.session_saved = True
+    except:
+        pass
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+# -------------------------------
+# CHAT DISPLAY
+# -------------------------------
+for msg in st.session_state.chat_history:
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
 
-if "user_info" not in st.session_state:
-    st.session_state.user_info = False
+# -------------------------------
+# USER INPUT
+# -------------------------------
+user_input = st.chat_input("Type your message here...")
 
-# Collect Lead Info First
-if not st.session_state.user_info:
-    with st.form("lead_form"):
-        name = st.text_input("Your Name")
-        phone = st.text_input("Phone Number")
-        submitted = st.form_submit_button("Start Chat")
+if user_input:
 
-        if submitted:
-            if name and phone:
-                st.session_state.name = name
-                st.session_state.phone = phone
-                st.session_state.user_info = True
-                st.rerun()
-            else:
-                st.error("Please enter all details")
+    # Detect emotion
+    emotion = detect_emotion(user_input)
 
-# Chat Interface
-if st.session_state.user_info:
+    # Save user message
+    st.session_state.chat_history.append({
+        "role": "user",
+        "content": user_input
+    })
 
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+    # Generate AI reply
+    bot_reply = generate_response(user_input, emotion)
 
-    user_input = st.chat_input("Ask your career question...")
+    st.session_state.chat_history.append({
+        "role": "assistant",
+        "content": bot_reply
+    })
 
-    if user_input:
+    # Save session to Supabase
+    save_chat_to_supabase(emotion)
 
-        st.session_state.messages.append({"role": "user", "content": user_input})
-
-        with st.chat_message("user"):
-            st.markdown(user_input)
-
-        bot_reply = generate_response(user_input)
-        lead_status = lead_temperature(user_input)
-
-        st.session_state.messages.append({"role": "assistant", "content": bot_reply})
-
-        with st.chat_message("assistant"):
-            st.markdown(bot_reply)
-            st.info(f"Lead Priority: {lead_status}")
-
-        data = {
-            "name": st.session_state.name,
-            "phone": st.session_state.phone,
-            "conversation": st.session_state.messages,
-            "lead_status": lead_status,
-            "created_at": datetime.utcnow().isoformat()
-        }
-
-        upsert_chat(st.session_state.phone, data)
-
-# ---------------- ADMIN PANEL ---------------- #
-
-st.markdown("---")
-if st.checkbox("Admin Login"):
-    pin = st.text_input("Enter 4-digit PIN", type="password")
-    if pin == "8948":
-        url = f"{SUPABASE_URL}/rest/v1/chats?select=*"
-        response = requests.get(url, headers=supabase_headers)
-        if response.status_code == 200:
-            df = pd.DataFrame(response.json())
-            st.dataframe(df)
-        else:
-            st.error("Failed to fetch data")
+    st.rerun()
