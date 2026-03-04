@@ -79,49 +79,29 @@ def generate_response(user_input, emotion):
         "Content-Type": "application/json"
     }
 
-    system_prompt = f"""
-You are a Kerala-based academic counsellor.
-
-Student emotion: {emotion}
-
-Speak naturally.
-Promote ACCA, CA, CMA smartly.
-Be persuasive but not repetitive.
-Ask one follow-up question.
-Keep under 150 words.
-"""
-
-    messages = [
-        {"role": "system", "content": system_prompt.strip()}
-    ]
-
-    for msg in st.session_state.chat_history[-6:]:
-        messages.append(msg)
-
-    messages.append({"role": "user", "content": user_input.strip()})
-
     payload = {
-        "model": "llama3-8b-8192",  # 👈 IMPORTANT CHANGE (70B sometimes blocked)
-        "messages": messages,
+        "model": "llama3-8b-8192",
+        "messages": [
+            {
+                "role": "system",
+                "content": f"You are a Kerala academic counsellor. Student emotion: {emotion}"
+            },
+            {
+                "role": "user",
+                "content": user_input
+            }
+        ],
         "temperature": 0.9,
-        "max_tokens": 200
+        "max_tokens": 150
     }
 
-    try:
-        response = requests.post(url, headers=headers, json=payload)
+    response = requests.post(url, headers=headers, json=payload)
 
-        st.write("DEBUG STATUS:", response.status_code)
+    # 🔥 FORCE SHOW EVERYTHING
+    st.write("STATUS CODE:", response.status_code)
+    st.write("RAW RESPONSE:", response.text)
 
-        if response.status_code != 200:
-            st.write("DEBUG ERROR:", response.text)
-            return "⚠ API error — check logs."
-
-        result = response.json()
-
-        return result["choices"][0]["message"]["content"]
-
-    except Exception as e:
-        return f"Exception: {str(e)}"
+    return "Check above debug output."
 # -------------------------------
 # SAVE TO SUPABASE (ONE ROW PER CHAT)
 # -------------------------------
