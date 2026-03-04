@@ -125,7 +125,7 @@ def save_chat(emotion, score, lead_type):
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json",
-        "Prefer": "resolution=merge-duplicates"
+        "Prefer": "resolution=merge-duplicates,return=representation"
     }
 
     data = {
@@ -137,6 +137,11 @@ def save_chat(emotion, score, lead_type):
         "course_interest": st.session_state.course_interest,
         "last_updated": datetime.now().isoformat()
     }
+
+    response = requests.post(url, headers=headers, json=data)
+
+    st.write("DEBUG STATUS:", response.status_code)
+    st.write("DEBUG RESPONSE:", response.text)
 
     requests.post(url, headers=headers, json=data, timeout=15)
 
