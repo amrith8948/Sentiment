@@ -1,49 +1,48 @@
 import streamlit as st
 import requests
-import re
+import json
+import os
 from datetime import datetime
 
-# =====================================
-# SAFE CONFIG
-# =====================================
+# ==============================
+# CONFIG
+# ==============================
 
-try:
-    SUPABASE_URL = st.secrets["SUPABASE_URL"]
-    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-    GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
-except:
-    SUPABASE_URL = ""
-    SUPABASE_KEY = ""
-    GROQ_API_KEY = ""
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 TABLE_NAME = "admissions_chat"
 
-st.set_page_config(page_title="Invisor Academic Counsellor")
+# ==============================
+# BROCHURE LOCKED DATA
+# (REPLACE WITH EXACT BROCHURE DATA)
+# ==============================
 
-# =====================================
-# BROCHURE CONTROLLED DATA (EDIT EXACTLY)
-# =====================================
+BROCHURE_KNOWLEDGE = """
+INVISOR GLOBAL OFFICIAL COURSE DETAILS:
 
-BROCHURE_DATA = {
-    "ACCA": {
-        "coaching_fee": "₹ 3.5L – 4.5L (as per brochure)",
-        "duration": "2–3 years depending on exemptions"
-    },
-    "CMA": {
-        "coaching_fee": "₹ 2.5L – 3.5L (as per brochure)",
-        "duration": "1.5–2 years"
-    }
-}
+ACCA:
+- Coaching Fee: ₹3,50,000 – ₹4,50,000
+- Duration: 2–3 years (depending on exemptions)
+- Structured mentoring and exam support included.
 
-# =====================================
-# SESSION STATE
-# =====================================
+CMA:
+- Coaching Fee: ₹2,50,000 – ₹3,50,000
+- Duration: 1.5–2 years
+- Levels: Foundation, Intermediate, Final.
 
-if "phone_number" not in st.session_state:
-    st.session_state.phone_number = None
+Scholarship:
+- Installment guidance available.
+- Financial support discussion possible.
 
-if "student_name" not in st.session_state:
-    st.session_state.student_name = None
+ONLY use the above information.
+Do not add anything outside this.
+"""
+
+# ==============================
+# SESSION STATE INIT
+# ==============================
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
@@ -51,101 +50,83 @@ if "chat_history" not in st.session_state:
 if "lead_tags" not in st.session_state:
     st.session_state.lead_tags = []
 
-# =====================================
-# VALIDATION
-# =====================================
+if "lead_score" not in st.session_state:
+    st.session_state.lead_score = 0
 
-def is_valid_phone(phone):
-    return re.match(r"^[6-9]\d{9}$", phone)
+if "student_name" not in st.session_state:
+    st.session_state.student_name = None
 
-# =====================================
-# EMOTION DETECTION
-# =====================================
+if "phone_number" not in st.session_state:
+    st.session_state.phone_number = None
 
-def detect_emotion(text):
-    text = text.lower()
-    if any(x in text for x in ["confused", "not sure", "doubt"]):
-        return "confused"
-    if any(x in text for x in ["worried", "scared", "tension"]):
-        return "anxious"
-    return "neutral"
+if "scholarship_interest" not in st.session_state:
+    st.session_state.scholarship_interest = False
 
-# =====================================
-# AUTO TAGGING
-# =====================================
-
-def detect_tags(user_input, existing_tags):
-    text = user_input.lower()
-
-    if "acca" in text and "ACCA_Interest" not in existing_tags:
-        existing_tags.append("ACCA_Interest")
-
-    if "cma" in text and "CMA_Interest" not in existing_tags:
-        existing_tags.append("CMA_Interest")
-
-    if "ca" in text and "CA_Interest" not in existing_tags:
-        existing_tags.append("CA_Interest")
-
-    financial_words = [
-        "financial issue", "costly", "expensive",
-        "fees high", "can't afford", "budget"
-    ]
-
-    if any(word in text for word in financial_words):
-        if "Scholarship_Concern" not in existing_tags:
-            existing_tags.append("Scholarship_Concern")
-
-    return existing_tags
-
-# =====================================
+# ==============================
 # LEAD SCORING
-# =====================================
+# ==============================
 
-def calculate_lead_score(chat_history):
-
-    score = 0
-
-    high_intent = ["fees", "admission", "join", "apply", "when start"]
-    medium_intent = ["salary", "scope", "career", "duration"]
-
-    for msg in chat_history:
-        if msg["role"] == "user":
-            text = msg["content"].lower()
-
-            for word in high_intent:
-                if word in text:
-                    score += 40
-
-            for word in medium_intent:
-                if word in text:
-                    score += 15
-
+def calculate_lead_type(score):
     if score >= 80:
-        return score, "Hot"
+        return "Hot"
     elif score >= 40:
-        return score, "Warm"
+        return "Warm"
     else:
-        return score, "Cold"
+        return "Cold"
 
-# =====================================
-# AI RESPONSE (NO FACT GENERATION)
-# =====================================
+# ==============================
+# SAVE TO SUPABASE
+# ==============================
 
-def generate_ai_response():
+def save_chat():
 
-    system_prompt = """
-You are a professional academic counsellor at Invisor Global.
+    url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}?on_conflict=phone_number"
+
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates"
+    }
+
+    data = {
+        "phone_number": st.session_state.phone_number,
+        "student_name": st.session_state.student_name,
+        "full_chat": st.session_state.chat_history,
+        "lead_tags": st.session_state.lead_tags,
+        "lead_score": st.session_state.lead_score,
+        "lead_type": calculate_lead_type(st.session_state.lead_score),
+        "scholarship_interest": st.session_state.scholarship_interest
+    }
+
+    requests.post(url, headers=headers, json=data, timeout=10)
+
+# ==============================
+# AI RESPONSE (BROCHURE LOCKED)
+# ==============================
+
+def generate_ai_response(user_input):
+
+    system_prompt = f"""
+You are an academic counsellor at Invisor Global.
+
+Use ONLY this brochure data:
+
+{BROCHURE_KNOWLEDGE}
 
 Rules:
-- Be encouraging.
-- Be clear.
-- Do NOT invent fees.
-- Do NOT invent partnerships.
-- Keep response under 120 words.
+- Do NOT invent numbers.
+- Do NOT mention external websites.
+- If information not available, say:
+  "Our academic counsellor can guide you personally."
+- Keep tone friendly, casual and encouraging.
+- Response under 120 words.
 """
 
-    messages = [{"role": "system", "content": system_prompt}]
-    messages += st.session_state.chat_history
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_input}
+    ]
 
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -155,138 +136,77 @@ Rules:
     data = {
         "model": "llama-3.1-8b-instant",
         "messages": messages,
-        "temperature": 0.7,
+        "temperature": 0.4,
         "max_tokens": 250
     }
 
-    try:
-        response = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers=headers,
-            json=data,
-            timeout=15
-        )
+    response = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers=headers,
+        json=data,
+        timeout=15
+    )
 
-        if response.status_code != 200:
-            return "Let me clarify that for you."
+    if response.status_code != 200:
+        return "Let me guide you properly. Could you clarify your question?"
 
-        return response.json()["choices"][0]["message"]["content"]
+    return response.json()["choices"][0]["message"]["content"]
 
-    except:
-        return "Facing a small technical issue."
-
-# =====================================
-# SAVE TO SUPABASE
-# =====================================
-
-def save_chat(emotion, score, lead_type):
-
-    url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}?on_conflict=phone_number"
-
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "resolution=merge-duplicates,return=representation"
-    }
-
-    data = {
-        "phone_number": st.session_state.phone_number,
-        "student_name": st.session_state.student_name,
-        "full_chat": st.session_state.chat_history,
-        "last_emotion": emotion,
-        "lead_score": score,
-        "lead_type": lead_type,
-        "lead_tags": st.session_state.lead_tags
-    }
-
-    try:
-        response = requests.post(url, headers=headers, json=data)
-
-        st.write("Status Code:", response.status_code)
-        st.write("Response Text:", response.text)
-
-    except Exception as e:
-        st.error(str(e))
-
-# =====================================
+# ==============================
 # UI
-# =====================================
+# ==============================
 
-st.title("🎓 Invisor Academic Counsellor")
+st.title("Invisor Academic Counsellor")
 
-# PHONE
-if not st.session_state.phone_number:
-    phone = st.text_input("📞 Enter mobile number")
-    if phone and is_valid_phone(phone):
-        st.session_state.phone_number = phone
-        st.rerun()
+if not st.session_state.student_name:
+    name = st.text_input("Enter your name")
+    phone = st.text_input("Enter your phone number")
 
-# NAME
-elif not st.session_state.student_name:
-    name = st.text_input("👤 Enter full name")
-    if name:
-        st.session_state.student_name = name
-        st.rerun()
-
-# CHAT
-else:
-
-    for msg in st.session_state.chat_history:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
-    user_input = st.chat_input("Ask about ACCA / CMA / Fees...")
-
-    if user_input:
-
-        st.session_state.chat_history.append(
-            {"role": "user", "content": user_input}
-        )
-
-        st.session_state.lead_tags = detect_tags(
-            user_input,
-            st.session_state.lead_tags
-        )
-
-        user_text = user_input.lower()
-
-        # Controlled responses
-        if "fees" in user_text and "acca" in user_text:
-            bot_reply = f"""
-ACCA Coaching Fee: {BROCHURE_DATA['ACCA']['coaching_fee']}
-Duration: {BROCHURE_DATA['ACCA']['duration']}
-"""
-
-        elif "fees" in user_text and "cma" in user_text:
-            bot_reply = f"""
-CMA Coaching Fee: {BROCHURE_DATA['CMA']['coaching_fee']}
-Duration: {BROCHURE_DATA['CMA']['duration']}
-"""
-
-        elif "financial issue" in user_text or "can't afford" in user_text:
-            bot_reply = """
-I understand your concern. We do provide structured payment options and scholarship guidance.
-
-Would you like me to connect you with our academic counsellor for financial planning support?
-"""
-
+    if st.button("Start Chat"):
+        if name and phone:
+            st.session_state.student_name = name
+            st.session_state.phone_number = phone
+            st.success("Welcome! How can I help you today?")
         else:
-            bot_reply = generate_ai_response()
+            st.warning("Please enter name and phone number.")
+    st.stop()
 
-        st.session_state.chat_history.append(
-            {"role": "assistant", "content": bot_reply}
-        )
+# ==============================
+# CHAT
+# ==============================
 
-        emotion = detect_emotion(user_input)
-        score, lead_type = calculate_lead_score(
-            st.session_state.chat_history
-        )
+user_input = st.text_input("Ask your question")
 
-        save_chat(emotion, score, lead_type)
+if user_input:
 
-        st.write("Lead Score:", score)
-        st.write("Lead Type:", lead_type)
-        st.write("Tags:", st.session_state.lead_tags)
+    st.session_state.chat_history.append(
+        {"role": "user", "content": user_input}
+    )
 
-        st.rerun()
+    lower_text = user_input.lower()
+
+    # AUTO TAGGING
+    if "acca" in lower_text and "ACCA interest" not in st.session_state.lead_tags:
+        st.session_state.lead_tags.append("ACCA interest")
+        st.session_state.lead_score += 40
+
+    if "cma" in lower_text and "CMA interest" not in st.session_state.lead_tags:
+        st.session_state.lead_tags.append("CMA interest")
+        st.session_state.lead_score += 40
+
+    # SCHOLARSHIP TRIGGER
+    if any(word in lower_text for word in [
+        "financial issue", "can't afford", "budget", "expensive"
+    ]):
+        st.session_state.scholarship_interest = True
+        st.session_state.lead_score += 30
+
+    bot_reply = generate_ai_response(user_input)
+
+    st.session_state.chat_history.append(
+        {"role": "assistant", "content": bot_reply}
+    )
+
+    st.write(bot_reply)
+
+    save_chat()
