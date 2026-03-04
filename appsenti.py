@@ -3,20 +3,26 @@ import requests
 import re
 from datetime import datetime
 
-# ==============================
-# CONFIGURATION
-# ==============================
+# =====================================
+# SAFE CONFIG (Works Local + Cloud)
+# =====================================
 
-SUPABASE_URL = "https://fxobfauvwlktyvvlhhot.supabase.co"
-SUPABASE_KEY = "sb_publishable_cnKAbv00i67Y0sv8iAIzVg_1r-0tR5l"
+try:
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+    GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+except Exception:
+    SUPABASE_URL = ""
+    SUPABASE_KEY = ""
+    GROQ_API_KEY = ""
 
 TABLE_NAME = "admissions_chat"
 
-st.set_page_config(page_title="Invisor Academic Counsellor", layout="centered")
+st.set_page_config(page_title="Invisor Academic Counsellor")
 
-# ==============================
+# =====================================
 # SESSION STATE
-# ==============================
+# =====================================
 
 if "phone_number" not in st.session_state:
     st.session_state.phone_number = None
@@ -30,16 +36,16 @@ if "chat_history" not in st.session_state:
 if "chat_completed" not in st.session_state:
     st.session_state.chat_completed = False
 
-# ==============================
+# =====================================
 # VALIDATION
-# ==============================
+# =====================================
 
 def is_valid_phone(phone):
     return re.match(r"^[6-9]\d{9}$", phone)
 
-# ==============================
+# =====================================
 # EMOTION DETECTION
-# ==============================
+# =====================================
 
 def detect_emotion(text):
     text = text.lower()
@@ -53,9 +59,9 @@ def detect_emotion(text):
 
     return "neutral"
 
-# ==============================
-# LEAD SCORING (FIXED)
-# ==============================
+# =====================================
+# LEAD SCORING
+# =====================================
 
 def calculate_lead_score(chat_history, emotion):
 
@@ -83,15 +89,12 @@ def calculate_lead_score(chat_history, emotion):
                 if word in text:
                     score += 15
 
-    # Engagement bonus
     if len(chat_history) >= 6:
         score += 20
 
-    # Emotional bonus
     if emotion == "anxious":
         score += 10
 
-    # Classification (CORRECTED LOGIC)
     if score >= 80:
         lead_type = "Hot"
     elif score >= 40:
@@ -101,25 +104,28 @@ def calculate_lead_score(chat_history, emotion):
 
     return score, lead_type
 
-# ==============================
-# GROQ AI RESPONSE
-# ==============================
+# =====================================
+# AI RESPONSE GENERATOR
+# =====================================
 
-def generate_ai_response():
+def generate_ai_response(groq_key):
 
-    system_prompt = f"""
+    if not groq_key:
+        return "AI service not configured properly."
+
+    system_prompt = """
 You are a professional Academic Counsellor from Invisor Global, Kerala.
 
 About Invisor:
-- Specializes in CMA (US), ACCA, CA coaching
-- Expert faculty with industry experience
-- Placement assistance support
-- Flexible weekday and weekend batches
-- Strong student mentoring
+- CMA (US), ACCA, CA coaching
+- Expert faculty
+- Placement assistance
+- Flexible batches
+- Strong mentoring
 
 Rules:
 - Speak naturally.
-- Avoid robotic tone.
+- Avoid robotic replies.
 - Do not repeat same structure.
 - Keep reply under 120 words.
 - Adapt to student question.
@@ -133,7 +139,7 @@ Rules:
         messages.append(msg)
 
     headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Authorization": f"Bearer {groq_key}",
         "Content-Type": "application/json"
     }
 
@@ -161,11 +167,14 @@ Rules:
     except requests.exceptions.RequestException:
         return "Unable to connect to AI service. Please try again."
 
-# ==============================
-# SAVE TO SUPABASE (SAFE)
-# ==============================
+# =====================================
+# SAVE TO SUPABASE
+# =====================================
 
 def save_chat(emotion, score, lead_type):
+
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
 
     try:
         url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}?on_conflict=phone_number"
@@ -192,9 +201,9 @@ def save_chat(emotion, score, lead_type):
     except requests.exceptions.RequestException:
         st.warning("Database connection failed. Lead not saved.")
 
-# ==============================
+# =====================================
 # UI
-# ==============================
+# =====================================
 
 st.title("🎓 Invisor Academic Counsellor")
 
@@ -223,7 +232,6 @@ else:
 
     st.success(f"Hello {st.session_state.student_name} 👋")
 
-    # Display previous messages
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
@@ -232,29 +240,23 @@ else:
 
     if user_input:
 
-        # Add user message
         st.session_state.chat_history.append(
             {"role": "user", "content": user_input}
         )
 
-        # Detect emotion
         emotion = detect_emotion(user_input)
 
-        # Generate AI response
-        bot_reply = generate_ai_response()
+        bot_reply = generate_ai_response(GROQ_API_KEY)
 
-        # Add AI response
         st.session_state.chat_history.append(
             {"role": "assistant", "content": bot_reply}
         )
 
-        # Calculate lead score
         score, lead_type = calculate_lead_score(
             st.session_state.chat_history,
             emotion
         )
 
-        # Strong push for HOT lead
         if score >= 80 and not st.session_state.chat_completed:
             st.session_state.chat_completed = True
             st.session_state.chat_history.append(
@@ -264,10 +266,9 @@ else:
                 }
             )
 
-        # Save to Supabase
         save_chat(emotion, score, lead_type)
 
-        # Debug info (remove in production)
+        # Debug (remove later)
         st.write("Lead Score:", score)
         st.write("Lead Type:", lead_type)
 
