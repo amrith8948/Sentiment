@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import re
+import json
 
 # ==============================
 # CONFIG
@@ -11,7 +12,6 @@ SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
 st.set_page_config(page_title="Kerala Career Guidance AI", page_icon="🎓")
 st.title("🎓 Kerala Career Guidance AI")
-st.caption("Academic Counsellor – ACCA | CA | CMA")
 
 # ==============================
 # SESSION STATE
@@ -25,9 +25,6 @@ if "student_name" not in st.session_state:
 if "phone_number" not in st.session_state:
     st.session_state.phone_number = None
 
-if "saved" not in st.session_state:
-    st.session_state.saved = False
-
 # ==============================
 # NAME INPUT
 # ==============================
@@ -38,7 +35,7 @@ if not st.session_state.student_name:
             st.session_state.student_name = name.strip()
             st.session_state.chat_history.append({
                 "role": "assistant",
-                "content": "Please share your number so we can guide you better."
+                "content": "Hi 👋 Please share your mobile number so we can guide you better."
             })
             st.rerun()
     st.stop()
@@ -63,7 +60,7 @@ def detect_emotion(text):
         return "neutral"
 
 # ==============================
-# GROQ RESPONSE
+# GROQ RESPONSE (Natural Flow)
 # ==============================
 def generate_response(user_input, emotion):
 
@@ -75,23 +72,23 @@ def generate_response(user_input, emotion):
     }
 
     system_prompt = f"""
-You are a Kerala-based academic counsellor.
+You are a friendly academic counsellor from Kerala.
 
-Emotion detected: {emotion}
+Student emotion: {emotion}
 
-Speak naturally.
-Guide towards ACCA, CA, CMA.
-Keep it conversational.
-Ask one engaging question.
-Keep under 120 words.
-End with:
-We will give you a call to speak in person.Thank you
+Talk naturally like WhatsApp.
+Guide towards ACCA, CA, CMA intelligently.
+Do NOT end every message with a fixed closing line.
+Ask only one relevant question.
+Keep it conversational and human.
 """
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_input}
-    ]
+    messages = [{"role": "system", "content": system_prompt}]
+
+    for msg in st.session_state.chat_history[-8:]:
+        messages.append(msg)
+
+    messages.append({"role": "user", "content": user_input})
 
     payload = {
         "model": "llama-3.3-70b-versatile",
@@ -103,22 +100,23 @@ We will give you a call to speak in person.Thank you
     response = requests.post(url, headers=headers, json=payload)
 
     if response.status_code != 200:
-        return "Our team will connect with you shortly. We will give you a call to speak in person.Thank you"
+        return "Could you tell me more about your career goals?"
 
     result = response.json()
     return result["choices"][0]["message"]["content"]
 
 # ==============================
-# SAVE TO SUPABASE
+# UPSERT TO SUPABASE (ONE ROW)
 # ==============================
 def save_chat(final_emotion):
 
-    url = f"{SUPABASE_URL}/rest/v1/admissions_chat"
+    url = f"{SUPABASE_URL}/rest/v1/admissions_chat?on_conflict=phone_number"
 
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates"
     }
 
     data = {
@@ -149,13 +147,13 @@ if user_input:
         "content": user_input
     })
 
-    # If phone not captured, validate number
+    # Capture phone first
     if not st.session_state.phone_number:
         if re.fullmatch(r"[6-9]\d{9}", user_input.strip()):
             st.session_state.phone_number = user_input.strip()
-            reply = "Thank you for sharing your number. How can I help you regarding ACCA, CA or CMA?"
+            reply = "Thanks 👍 How can I guide you regarding ACCA, CA or CMA?"
         else:
-            reply = "Please enter a valid 10-digit mobile number starting with 6,7,8 or 9."
+            reply = "Please enter a valid 10-digit Kerala mobile number."
 
         st.session_state.chat_history.append({
             "role": "assistant",
