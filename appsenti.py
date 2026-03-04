@@ -3,18 +3,22 @@ import requests
 import json
 import random
 
-# -----------------------------
+# ==============================
 # CONFIG
-# -----------------------------
+# ==============================
 
 SUPABASE_URL = "https://fxobfauvwlktyvvlhhot.supabase.co"
 SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY"
 
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+
 st.set_page_config(page_title="Kerala Career Guidance AI")
 
-# -----------------------------
-# SESSION INIT
-# -----------------------------
+# ==============================
+# SESSION STATE
+# ==============================
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
@@ -22,32 +26,22 @@ if "chat_history" not in st.session_state:
 if "phone_number" not in st.session_state:
     st.session_state.phone_number = None
 
-if "student_name" not in st.session_state:
-    st.session_state.student_name = None
-
 if "chat_completed" not in st.session_state:
     st.session_state.chat_completed = False
 
-# -----------------------------
+
+# ==============================
 # LEAD SCORING
-# -----------------------------
+# ==============================
 
 def calculate_lead_score(chat_history):
     score = 0
-    
-    high_intent = [
-        "fees", "admission", "join", "apply",
-        "duration", "classes start", "eligibility", "scholarship"
-    ]
 
-    medium_intent = [
-        "salary", "scope", "difficulty",
-        "comparison", "which is better", "career"
-    ]
+    high_intent = ["fees","admission","join","apply","duration",
+                   "classes","scholarship","when start","how to join"]
 
-    low_intent = [
-        "what is", "just checking", "not sure", "thinking"
-    ]
+    medium_intent = ["salary","scope","difficult","comparison",
+                     "which better","career","job"]
 
     for msg in chat_history:
         if msg["role"] == "user":
@@ -55,28 +49,23 @@ def calculate_lead_score(chat_history):
 
             for word in high_intent:
                 if word in text:
-                    score += 25
+                    score += 30
 
             for word in medium_intent:
                 if word in text:
                     score += 10
 
-            for word in low_intent:
-                if word in text:
-                    score += 3
-
     if score >= 70:
-        lead_type = "Hot"
+        return score, "Hot"
     elif score >= 40:
-        lead_type = "Warm"
+        return score, "Warm"
     else:
-        lead_type = "Cold"
+        return score, "Cold"
 
-    return score, lead_type
 
-# -----------------------------
-# SAVE TO SUPABASE
-# -----------------------------
+# ==============================
+# SAVE TO SUPABASE (ONE ROW ONLY)
+# ==============================
 
 def save_chat(final_emotion):
 
@@ -92,7 +81,6 @@ def save_chat(final_emotion):
     }
 
     data = {
-        "student_name": st.session_state.student_name,
         "phone_number": st.session_state.phone_number,
         "full_chat": st.session_state.chat_history,
         "last_emotion": final_emotion,
@@ -102,111 +90,125 @@ def save_chat(final_emotion):
 
     requests.post(url, headers=headers, json=data)
 
-# -----------------------------
-# EMOTION DETECTION (Simple)
-# -----------------------------
+
+# ==============================
+# EMOTION DETECTION (LIGHT)
+# ==============================
 
 def detect_emotion(text):
     text = text.lower()
 
-    if any(x in text for x in ["confused", "not sure", "dont know"]):
+    if any(x in text for x in ["confused","not sure","dont know"]):
         return "confused"
-    if any(x in text for x in ["afraid", "fear", "scared"]):
+    if any(x in text for x in ["afraid","scared","fear"]):
         return "fear"
-    if any(x in text for x in ["sad", "worried"]):
-        return "sad"
-    if any(x in text for x in ["happy", "excited"]):
-        return "happy"
+    if any(x in text for x in ["worried","tension"]):
+        return "anxious"
+    if any(x in text for x in ["excited","happy"]):
+        return "excited"
 
     return "neutral"
 
-# -----------------------------
-# DYNAMIC RESPONSE GENERATOR
-# -----------------------------
+
+# ==============================
+# GROQ DYNAMIC RESPONSE
+# ==============================
 
 def generate_response(user_input, emotion):
 
-    openings = {
-        "confused": "I understand you're confused.",
-        "fear": "It's completely normal to feel that way.",
-        "sad": "Don't worry, many students feel this initially.",
-        "happy": "That's great to hear!",
-        "neutral": "That's a good question."
-    }
+    system_prompt = f"""
+You are a highly intelligent academic counsellor targeting Kerala students.
 
-    intro = openings.get(emotion, "I understand.")
-
-    dynamic_closings = [
-        "Would you like details about fees or eligibility?",
-        "Shall I explain duration and exam structure?",
-        "Would you like to know placement support details?",
-        "Shall I share scholarship information?"
-    ]
-
-    closing = random.choice(dynamic_closings)
-
-    main_content = f"""
-{intro}
-
-In Kerala, many students after +2 choose professional courses like ACCA, CA or CMA depending on their career goals.
-
-• ACCA – Global recognition 🌍
-• CA – Strong India reputation 🇮🇳
-• CMA – Corporate finance focus 📊
-
-{closing}
+Rules:
+- Speak naturally (not robotic).
+- Do NOT repeat same structure.
+- Be conversational.
+- Adapt reply based on student message.
+- Soft sell ACCA / CA / CMA when relevant.
+- Keep response under 120 words.
+- Only close conversation when strong admission intent.
 """
 
-    return main_content
+    messages = [
+        {"role": "system", "content": system_prompt}
+    ]
 
-# -----------------------------
+    # Add full chat history for context
+    for msg in st.session_state.chat_history:
+        messages.append(msg)
+
+    messages.append({"role": "user", "content": user_input})
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    data = {
+        "model": "llama-3.1-8b-instant",
+        "messages": messages,
+        "temperature": 0.9,
+        "max_tokens": 300
+    }
+
+    response = requests.post(GROQ_URL, headers=headers, json=data)
+
+    if response.status_code != 200:
+        return "⚠ AI temporarily unavailable. Please try again."
+
+    result = response.json()
+
+    reply = result["choices"][0]["message"]["content"]
+
+    return reply
+
+
+# ==============================
 # UI
-# -----------------------------
+# ==============================
 
 st.title("🎓 Kerala Career Guidance AI")
 
-# Step 1 – Ask Phone Number First
+# Step 1: Ask phone first
 if not st.session_state.phone_number:
     phone = st.text_input("📞 Please share your number to continue:")
 
     if phone and len(phone) >= 10:
         st.session_state.phone_number = phone
-        st.success("Thank you! You can now start chatting.")
+        st.success("Thank you! Let's start.")
         st.rerun()
 
-# Step 2 – Chat Interface
+# Step 2: Chat
 if st.session_state.phone_number:
 
-    user_input = st.chat_input("Type your message...")
+    user_input = st.chat_input("Ask about ACCA, CA, CMA...")
 
     if user_input:
 
-        # Save user message
-        st.session_state.chat_history.append({
-            "role": "user",
-            "content": user_input
-        })
+        st.session_state.chat_history.append(
+            {"role": "user", "content": user_input}
+        )
 
         emotion = detect_emotion(user_input)
 
         bot_reply = generate_response(user_input, emotion)
 
-        # If high intent → close conversation
-        score, lead_type = calculate_lead_score(st.session_state.chat_history)
+        score, lead_type = calculate_lead_score(
+            st.session_state.chat_history
+        )
 
+        # Close only if HOT lead
         if score >= 70 and not st.session_state.chat_completed:
             bot_reply += "\n\nWe will give you a call to speak in person. Thank you"
             st.session_state.chat_completed = True
             save_chat(emotion)
 
-        st.session_state.chat_history.append({
-            "role": "assistant",
-            "content": bot_reply
-        })
+        st.session_state.chat_history.append(
+            {"role": "assistant", "content": bot_reply}
+        )
 
         st.rerun()
 
-    # Display Chat
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
