@@ -1,6 +1,5 @@
 import streamlit as st
 import requests
-import json
 
 # ==============================
 # CONFIG
@@ -60,7 +59,7 @@ def detect_emotion(text):
         return "neutral"
 
 # ==============================
-# GROQ RESPONSE
+# GROQ RESPONSE (UPDATED MODEL)
 # ==============================
 def generate_response(user_input, emotion):
 
@@ -74,27 +73,25 @@ def generate_response(user_input, emotion):
     system_prompt = f"""
 You are a senior academic counsellor based in Kerala.
 
-Student emotion detected: {emotion}
+Student emotion: {emotion}
 
-Your mission:
-- Respond naturally like a human mentor
-- Promote ACCA, CA, CMA smartly
-- Adapt tone based on emotion
-- Avoid repeating templates
-- Keep under 150 words
-- Ask 1 strong follow-up question
+Instructions:
+- Speak naturally like a Kerala mentor
+- Promote ACCA, CA, CMA intelligently
+- Avoid repeating same reply
+- Keep response under 150 words
+- Ask one engaging follow-up question
 """
 
     messages = [{"role": "system", "content": system_prompt}]
 
-    # Add last 6 messages for context
     for msg in st.session_state.chat_history[-6:]:
         messages.append(msg)
 
     messages.append({"role": "user", "content": user_input})
 
     payload = {
-        "model": "llama3-8b-8192",
+        "model": "llama-3.3-70b-versatile",   # ✅ NEW WORKING MODEL
         "messages": messages,
         "temperature": 1.0,
         "top_p": 0.95,
@@ -109,16 +106,13 @@ Your mission:
 
         result = response.json()
 
-        if "choices" in result:
-            return result["choices"][0]["message"]["content"]
-
-        return "Could you tell me more about your goals?"
+        return result["choices"][0]["message"]["content"]
 
     except Exception as e:
         return f"Exception: {str(e)}"
 
 # ==============================
-# SAVE TO SUPABASE (ONE ROW)
+# SAVE TO SUPABASE
 # ==============================
 def save_chat(final_emotion):
 
