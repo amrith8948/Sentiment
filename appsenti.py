@@ -181,16 +181,13 @@ Rules:
 
 def save_chat(emotion, score, lead_type):
 
-    if not SUPABASE_URL:
-        return
-
     url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}?on_conflict=phone_number"
 
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json",
-        "Prefer": "resolution=merge-duplicates"
+        "Prefer": "resolution=merge-duplicates,return=representation"
     }
 
     data = {
@@ -200,11 +197,17 @@ def save_chat(emotion, score, lead_type):
         "last_emotion": emotion,
         "lead_score": score,
         "lead_type": lead_type,
-        "lead_tags": st.session_state.lead_tags,
-        "last_updated": datetime.utcnow().isoformat()
+        "lead_tags": st.session_state.lead_tags
     }
 
-    requests.post(url, headers=headers, json=data)
+    try:
+        response = requests.post(url, headers=headers, json=data)
+
+        st.write("Status Code:", response.status_code)
+        st.write("Response Text:", response.text)
+
+    except Exception as e:
+        st.error(str(e))
 
 # =====================================
 # UI
