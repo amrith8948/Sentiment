@@ -7,8 +7,8 @@ from datetime import datetime
 # CONFIGURATION
 # ==============================
 
-SUPABASE_URL = "https://YOUR_PROJECT_ID.supabase.co"
-SUPABASE_KEY = "YOUR_PUBLISHABLE_KEY"
+SUPABASE_URL = "https://fxobfauvwlktyvvlhhot.supabase.co"
+SUPABASE_KEY = "sb_publishable_cnKAbv00i67Y0sv8iAIzVg_1r-0tR5l"
 
 TABLE_NAME = "admissions_chat"
 
