@@ -3,90 +3,51 @@ import requests
 import re
 from datetime import datetime
 
-# =====================================
-# CONFIG
-# =====================================
+# ==============================
+# CONFIGURATION
+# ==============================
 
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+SUPABASE_URL = "https://YOUR_PROJECT_ID.supabase.co"
+SUPABASE_KEY = "YOUR_PUBLISHABLE_KEY"
 
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+TABLE_NAME = "admissions_chat"
 
-st.set_page_config(page_title="Invisor Academic Counsellor AI")
+st.set_page_config(page_title="Invisor Academic Counsellor", layout="centered")
 
-# =====================================
+# ==============================
 # SESSION STATE
-# =====================================
-
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+# ==============================
 
 if "phone_number" not in st.session_state:
     st.session_state.phone_number = None
 
-if "chat_completed" not in st.session_state:
-    st.session_state.chat_completed = False
+if "student_name" not in st.session_state:
+    st.session_state.student_name = None
 
-if "course_interest" not in st.session_state:
-    st.session_state.course_interest = "General"
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
-# =====================================
-# PHONE VALIDATION (INDIA)
-# =====================================
+# ==============================
+# UTILITIES
+# ==============================
 
 def is_valid_phone(phone):
-    pattern = r"^[6-9]\d{9}$"
-    return re.match(pattern, phone)
-
-# =====================================
-# COURSE DETECTION
-# =====================================
-
-def detect_course_interest(text):
-    text = text.lower()
-
-    if "cma" in text:
-        return "CMA USA"
-    elif "acca" in text:
-        return "ACCA + BCom"
-    elif "fcp" in text or "internship" in text:
-        return "First Career Program"
-    elif "cpa" in text:
-        return "CPA USA"
-    elif "ea" in text:
-        return "EA USA"
-    else:
-        return "General"
-
-# =====================================
-# EMOTION DETECTION
-# =====================================
+    return re.match(r"^[6-9]\d{9}$", phone)
 
 def detect_emotion(text):
     text = text.lower()
-
-    if any(x in text for x in ["confused", "not sure"]):
-        return "confused"
-    if any(x in text for x in ["worried", "tension", "anxious"]):
+    if any(word in text for word in ["confused", "worried", "not sure", "scared"]):
         return "anxious"
-    if any(x in text for x in ["fear", "scared"]):
-        return "fear"
-    if any(x in text for x in ["excited", "happy"]):
+    elif any(word in text for word in ["excited", "interested", "love"]):
         return "excited"
-
     return "neutral"
-
-# =====================================
-# LEAD SCORING ENGINE
-# =====================================
 
 def calculate_lead_score(chat_history, emotion):
 
     score = 0
 
     high_intent = ["fees", "admission", "join", "apply", "batch", "when start"]
-    medium_intent = ["salary", "scope", "career", "comparison", "placement"]
+    medium_intent = ["salary", "scope", "career", "placement", "duration"]
 
     for msg in chat_history:
         if msg["role"] == "user":
@@ -100,157 +61,132 @@ def calculate_lead_score(chat_history, emotion):
                 if word in text:
                     score += 15
 
-    if len(chat_history) >= 4:
-        score += 10
+    if len(chat_history) >= 6:
+        score += 15
 
     if emotion == "anxious":
         score += 10
 
     if score >= 80:
-        return score, "Hot"
+        lead_type = "Hot"
     elif score >= 40:
-        return score, "Warm"
+        lead_type = "Warm"
     else:
-        return score, "Cold"
+        lead_type = "Cold"
 
-# =====================================
-# SAVE TO SUPABASE
-# =====================================
+    return score, lead_type
+
+# ==============================
+# SUPABASE SAVE
+# ==============================
 
 def save_chat(emotion, score, lead_type):
 
-    url = f"{SUPABASE_URL}/rest/v1/admissions_chat?on_conflict=phone_number"
+    url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}?on_conflict=phone_number"
 
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json",
-        "Prefer": "resolution=merge-duplicates,return=representation"
+        "Prefer": "resolution=merge-duplicates"
     }
 
     data = {
         "phone_number": st.session_state.phone_number,
+        "student_name": st.session_state.student_name,
         "full_chat": st.session_state.chat_history,
         "last_emotion": emotion,
         "lead_score": score,
         "lead_type": lead_type,
-        "course_interest": st.session_state.course_interest,
-        "last_updated": datetime.now().isoformat()
+        "last_updated": datetime.utcnow().isoformat()
     }
 
     response = requests.post(url, headers=headers, json=data)
 
-    st.write("DEBUG STATUS:", response.status_code)
-    st.write("DEBUG RESPONSE:", response.text)
+    print("STATUS:", response.status_code)
+    print("RESPONSE:", response.text)
 
-    requests.post(url, headers=headers, json=data, timeout=15)
-
-# =====================================
-# GROQ RESPONSE GENERATOR
-# =====================================
-
-def generate_response(user_input):
-
-    system_prompt = """
-You are the official Academic Counsellor of Invisor Learning (Infopark Cochin).
-
-About Invisor:
-- Canadian-based finance consulting and offshore accounting firm.
-- 600+ MNC placements.
-- 92% admission-to-placement ratio.
-- Offices in Cochin, Thrissur, and Canada.
-- Offers CMA USA, ACCA + BCom, CPA USA, EA USA, and First Career Program (FCP).
-
-Your Role:
-- Guide students about CMA USA and ACCA programs.
-- Explain duration, eligibility, curriculum, and career path clearly.
-- Highlight Corporate Training Program (CTP) and FCP internship advantage when relevant.
-- Emphasize real US accounting exposure and Infopark campus training.
-- Speak professionally and confidently.
-- Keep response under 140 words.
-- Push for counselling call only if strong admission intent is shown.
-"""
-
-    messages = [{"role": "system", "content": system_prompt}]
-
-    for msg in st.session_state.chat_history:
-        messages.append(msg)
-
-    messages.append({"role": "user", "content": user_input})
-
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    data = {
-        "model": "llama-3.1-8b-instant",
-        "messages": messages,
-        "temperature": 0.7,
-        "max_tokens": 350
-    }
-
-    response = requests.post(GROQ_URL, headers=headers, json=data, timeout=20)
-
-    if response.status_code != 200:
-        return "⚠️ Our system is temporarily busy. Please try again."
-
-    return response.json()["choices"][0]["message"]["content"]
-
-# =====================================
+# ==============================
 # UI
-# =====================================
+# ==============================
 
-st.title("🎓 Invisor Academic Counsellor AI")
-st.caption("Infopark Cochin | Canada-Based Finance Training & Placement")
+st.title("🎓 Invisor Academic Counsellor")
 
-# STEP 1 - PHONE NUMBER
+# STEP 1 – PHONE
 if not st.session_state.phone_number:
 
-    phone = st.text_input("📞 Enter your 10-digit mobile number to continue:")
+    phone = st.text_input("📞 Enter your 10-digit mobile number:")
 
-    if phone:
-        if is_valid_phone(phone):
-            st.session_state.phone_number = phone
-            st.success("Verified ✅ You can now chat with our Academic Counsellor.")
-            st.rerun()
-        else:
-            st.error("Please enter a valid Indian mobile number.")
+    if phone and is_valid_phone(phone):
+        st.session_state.phone_number = phone
+        st.success("Mobile verified ✅")
+        st.rerun()
 
-# STEP 2 - CHAT
-if st.session_state.phone_number:
+# STEP 2 – NAME
+elif not st.session_state.student_name:
 
-    user_input = st.chat_input("Ask about CMA USA, ACCA, Placements, FCP...")
+    name = st.text_input("👤 Please enter your full name:")
+
+    if name and len(name) > 2:
+        st.session_state.student_name = name
+        st.success(f"Welcome {name}! You can now chat with our Academic Counsellor.")
+        st.rerun()
+
+# STEP 3 – CHAT
+else:
+
+    st.success(f"Hello {st.session_state.student_name} 👋")
+
+    for msg in st.session_state.chat_history:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    user_input = st.chat_input("Ask about CMA / ACCA / Admissions / Fees...")
 
     if user_input:
 
-        st.session_state.chat_history.append(
-            {"role": "user", "content": user_input}
-        )
+        # Add user message
+        st.session_state.chat_history.append({
+            "role": "user",
+            "content": user_input
+        })
 
+        # Detect emotion
         emotion = detect_emotion(user_input)
-        st.session_state.course_interest = detect_course_interest(user_input)
 
-        bot_reply = generate_response(user_input)
+        # Academic Counsellor Response
+        response_text = f"""
+Hi {st.session_state.student_name},
 
+Thank you for your interest in Invisor Global.
+
+Regarding your query about "{user_input}",
+
+Our CMA and ACCA programs are designed with:
+• Expert Faculty
+• Placement Assistance
+• Flexible Batches
+• Industry-Focused Curriculum
+
+Would you like details about fees, duration, or career scope?
+"""
+
+        st.session_state.chat_history.append({
+            "role": "assistant",
+            "content": response_text
+        })
+
+        # Calculate lead score
         score, lead_type = calculate_lead_score(
-            st.session_state.chat_history, emotion
+            st.session_state.chat_history,
+            emotion
         )
 
-        # Smart closing for HOT leads
-        if score >= 80 and not st.session_state.chat_completed:
-            bot_reply += "\n\nWould you like our academic team to call you for detailed guidance?"
-            st.session_state.chat_completed = True
-
-        st.session_state.chat_history.append(
-            {"role": "assistant", "content": bot_reply}
-        )
-
+        # Save to Supabase
         save_chat(emotion, score, lead_type)
 
-        st.rerun()
+        # Debug Display
+        st.write("Lead Score:", score)
+        st.write("Lead Type:", lead_type)
 
-    # Display Chat
-    for msg in st.session_state.chat_history:
-        with st.chat_message(msg["role"]):
-            st.write(msg["content"])
+        st.rerun()
