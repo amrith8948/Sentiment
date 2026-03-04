@@ -1,114 +1,86 @@
 import streamlit as st
 import requests
-import re
 import json
+import random
 
-# ==============================
+# -----------------------------
 # CONFIG
-# ==============================
-GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+# -----------------------------
 
-st.set_page_config(page_title="Kerala Career Guidance AI", page_icon="🎓")
-st.title("🎓 Kerala Career Guidance AI")
+SUPABASE_URL = "https://fxobfauvwlktyvvlhhot.supabase.co"
+SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY"
 
-# ==============================
-# SESSION STATE
-# ==============================
+st.set_page_config(page_title="Kerala Career Guidance AI")
+
+# -----------------------------
+# SESSION INIT
+# -----------------------------
+
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
-
-if "student_name" not in st.session_state:
-    st.session_state.student_name = ""
 
 if "phone_number" not in st.session_state:
     st.session_state.phone_number = None
 
-# ==============================
-# NAME INPUT
-# ==============================
-if not st.session_state.student_name:
-    name = st.text_input("Enter your name")
-    if st.button("Start Chat"):
-        if name.strip():
-            st.session_state.student_name = name.strip()
-            st.session_state.chat_history.append({
-                "role": "assistant",
-                "content": "Hi 👋 Please share your mobile number so we can guide you better."
-            })
-            st.rerun()
-    st.stop()
+if "student_name" not in st.session_state:
+    st.session_state.student_name = None
 
-# ==============================
-# EMOTION DETECTION
-# ==============================
-def detect_emotion(text):
-    try:
-        url = "https://api-inference.huggingface.co/models/SamLowe/roberta-base-go_emotions"
-        response = requests.post(url, json={"inputs": text}, timeout=10)
+if "chat_completed" not in st.session_state:
+    st.session_state.chat_completed = False
 
-        if response.status_code != 200:
-            return "neutral"
+# -----------------------------
+# LEAD SCORING
+# -----------------------------
 
-        result = response.json()
-        scores = result[0]
-        top = max(scores, key=lambda x: x["score"])
-        return top["label"]
+def calculate_lead_score(chat_history):
+    score = 0
+    
+    high_intent = [
+        "fees", "admission", "join", "apply",
+        "duration", "classes start", "eligibility", "scholarship"
+    ]
 
-    except:
-        return "neutral"
+    medium_intent = [
+        "salary", "scope", "difficulty",
+        "comparison", "which is better", "career"
+    ]
 
-# ==============================
-# GROQ RESPONSE (Natural Flow)
-# ==============================
-def generate_response(user_input, emotion):
+    low_intent = [
+        "what is", "just checking", "not sure", "thinking"
+    ]
 
-    url = "https://api.groq.com/openai/v1/chat/completions"
+    for msg in chat_history:
+        if msg["role"] == "user":
+            text = msg["content"].lower()
 
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
+            for word in high_intent:
+                if word in text:
+                    score += 25
 
-    system_prompt = f"""
-You are a friendly academic counsellor from Kerala.
+            for word in medium_intent:
+                if word in text:
+                    score += 10
 
-Student emotion: {emotion}
+            for word in low_intent:
+                if word in text:
+                    score += 3
 
-Talk naturally like WhatsApp.
-Guide towards ACCA, CA, CMA intelligently.
-Do NOT end every message with a fixed closing line.
-Ask only one relevant question.
-Keep it conversational and human.
-"""
+    if score >= 70:
+        lead_type = "Hot"
+    elif score >= 40:
+        lead_type = "Warm"
+    else:
+        lead_type = "Cold"
 
-    messages = [{"role": "system", "content": system_prompt}]
+    return score, lead_type
 
-    for msg in st.session_state.chat_history[-8:]:
-        messages.append(msg)
+# -----------------------------
+# SAVE TO SUPABASE
+# -----------------------------
 
-    messages.append({"role": "user", "content": user_input})
-
-    payload = {
-        "model": "llama-3.3-70b-versatile",
-        "messages": messages,
-        "temperature": 1.1,
-        "max_tokens": 200
-    }
-
-    response = requests.post(url, headers=headers, json=payload)
-
-    if response.status_code != 200:
-        return "Could you tell me more about your career goals?"
-
-    result = response.json()
-    return result["choices"][0]["message"]["content"]
-
-# ==============================
-# UPSERT TO SUPABASE (ONE ROW)
-# ==============================
 def save_chat(final_emotion):
+
+    score, lead_type = calculate_lead_score(st.session_state.chat_history)
 
     url = f"{SUPABASE_URL}/rest/v1/admissions_chat?on_conflict=phone_number"
 
@@ -123,54 +95,118 @@ def save_chat(final_emotion):
         "student_name": st.session_state.student_name,
         "phone_number": st.session_state.phone_number,
         "full_chat": st.session_state.chat_history,
-        "last_emotion": final_emotion
+        "last_emotion": final_emotion,
+        "lead_score": score,
+        "lead_type": lead_type
     }
 
     requests.post(url, headers=headers, json=data)
 
-# ==============================
-# DISPLAY CHAT
-# ==============================
-for msg in st.session_state.chat_history:
-    with st.chat_message(msg["role"]):
-        st.write(msg["content"])
+# -----------------------------
+# EMOTION DETECTION (Simple)
+# -----------------------------
 
-# ==============================
-# USER INPUT
-# ==============================
-user_input = st.chat_input("Type your message")
+def detect_emotion(text):
+    text = text.lower()
 
-if user_input:
+    if any(x in text for x in ["confused", "not sure", "dont know"]):
+        return "confused"
+    if any(x in text for x in ["afraid", "fear", "scared"]):
+        return "fear"
+    if any(x in text for x in ["sad", "worried"]):
+        return "sad"
+    if any(x in text for x in ["happy", "excited"]):
+        return "happy"
 
-    st.session_state.chat_history.append({
-        "role": "user",
-        "content": user_input
-    })
+    return "neutral"
 
-    # Capture phone first
-    if not st.session_state.phone_number:
-        if re.fullmatch(r"[6-9]\d{9}", user_input.strip()):
-            st.session_state.phone_number = user_input.strip()
-            reply = "Thanks 👍 How can I guide you regarding ACCA, CA or CMA?"
-        else:
-            reply = "Please enter a valid 10-digit Kerala mobile number."
+# -----------------------------
+# DYNAMIC RESPONSE GENERATOR
+# -----------------------------
+
+def generate_response(user_input, emotion):
+
+    openings = {
+        "confused": "I understand you're confused.",
+        "fear": "It's completely normal to feel that way.",
+        "sad": "Don't worry, many students feel this initially.",
+        "happy": "That's great to hear!",
+        "neutral": "That's a good question."
+    }
+
+    intro = openings.get(emotion, "I understand.")
+
+    dynamic_closings = [
+        "Would you like details about fees or eligibility?",
+        "Shall I explain duration and exam structure?",
+        "Would you like to know placement support details?",
+        "Shall I share scholarship information?"
+    ]
+
+    closing = random.choice(dynamic_closings)
+
+    main_content = f"""
+{intro}
+
+In Kerala, many students after +2 choose professional courses like ACCA, CA or CMA depending on their career goals.
+
+• ACCA – Global recognition 🌍
+• CA – Strong India reputation 🇮🇳
+• CMA – Corporate finance focus 📊
+
+{closing}
+"""
+
+    return main_content
+
+# -----------------------------
+# UI
+# -----------------------------
+
+st.title("🎓 Kerala Career Guidance AI")
+
+# Step 1 – Ask Phone Number First
+if not st.session_state.phone_number:
+    phone = st.text_input("📞 Please share your number to continue:")
+
+    if phone and len(phone) >= 10:
+        st.session_state.phone_number = phone
+        st.success("Thank you! You can now start chatting.")
+        st.rerun()
+
+# Step 2 – Chat Interface
+if st.session_state.phone_number:
+
+    user_input = st.chat_input("Type your message...")
+
+    if user_input:
+
+        # Save user message
+        st.session_state.chat_history.append({
+            "role": "user",
+            "content": user_input
+        })
+
+        emotion = detect_emotion(user_input)
+
+        bot_reply = generate_response(user_input, emotion)
+
+        # If high intent → close conversation
+        score, lead_type = calculate_lead_score(st.session_state.chat_history)
+
+        if score >= 70 and not st.session_state.chat_completed:
+            bot_reply += "\n\nWe will give you a call to speak in person. Thank you"
+            st.session_state.chat_completed = True
+            save_chat(emotion)
 
         st.session_state.chat_history.append({
             "role": "assistant",
-            "content": reply
+            "content": bot_reply
         })
 
         st.rerun()
 
-    # After number captured
-    emotion = detect_emotion(user_input)
-    bot_reply = generate_response(user_input, emotion)
-
-    st.session_state.chat_history.append({
-        "role": "assistant",
-        "content": bot_reply
-    })
-
-    save_chat(emotion)
-
-    st.rerun()
+    # Display Chat
+    for msg in st.session_state.chat_history:
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
