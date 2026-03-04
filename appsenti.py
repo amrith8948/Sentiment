@@ -21,6 +21,24 @@ TABLE_NAME = "admissions_chat"
 st.set_page_config(page_title="Invisor Academic Counsellor")
 
 # =====================================
+# OFFICIAL BROCHURE DATA (EDIT WITH REAL VALUES)
+# =====================================
+
+BROCHURE_DATA = {
+    "ACCA": {
+        "coaching_fee": "₹ 3,50,000 – 4,50,000 (as per brochure)",
+        "exam_fee_note": "Exam fees are paid directly to ACCA UK as per their official structure.",
+        "duration": "2 to 3 years depending on exemptions.",
+        "degree_info": "ACCA qualification may provide academic progression options as per ACCA rules."
+    },
+    "CMA": {
+        "coaching_fee": "₹ 2,50,000 – 3,50,000 (as per brochure)",
+        "duration": "1.5 to 2 years.",
+        "structure": "3 Levels – Foundation, Intermediate, Final."
+    }
+}
+
+# =====================================
 # SESSION STATE
 # =====================================
 
@@ -67,15 +85,8 @@ def calculate_lead_score(chat_history, emotion):
 
     score = 0
 
-    high_intent = [
-        "fees", "admission", "join", "apply",
-        "batch", "when start", "enroll", "register"
-    ]
-
-    medium_intent = [
-        "salary", "scope", "placement",
-        "career", "duration", "difficult"
-    ]
+    high_intent = ["fees", "admission", "join", "apply", "batch", "enroll"]
+    medium_intent = ["salary", "scope", "placement", "career", "duration"]
 
     for msg in chat_history:
         if msg["role"] == "user":
@@ -105,57 +116,27 @@ def calculate_lead_score(chat_history, emotion):
     return score, lead_type
 
 # =====================================
-# AI RESPONSE GENERATOR
+# AI COUNSELLING RESPONSE (NO FACTS)
 # =====================================
 
 def generate_ai_response(groq_key):
 
     if not groq_key:
-        return "AI service not configured properly."
+        return "AI service not configured."
 
     system_prompt = """
-You are a senior Academic Counsellor from Invisor Global, Kerala.
+You are a senior Academic Counsellor at Invisor Global, Kerala.
 
-Your tone:
-- Confident
-- Encouraging
-- Clear
-- Not robotic
-- Not salesy
-- Not pushy
-- Not exaggerated
-
-Important:
-- NEVER inflate fee numbers.
-- Give realistic Kerala market ranges.
-- Break fees clearly (exam + coaching).
-- Do not give extreme ranges like 8-12 lakhs.
-- Keep answers reassuring and structured.
-- Avoid long paragraphs.
-- Keep reply under 120 words.
-- Make student feel supported.
-
-Invisor Focus:
-- CMA (US)
-- ACCA
-- CA Foundation support
-- Mentoring + placement assistance
-
-If student asks about fees:
-- Explain components clearly.
-- Mention it is an investment in global qualification.
-- Offer to explain roadmap.
-- Avoid shocking numbers.
-
-If student sounds confused:
-- Reassure them.
-- Guide step-by-step.
-
-If admission intent is strong:
-- Suggest personal counselling call politely.
-
-Always adapt response to question.
+Rules:
+- Be encouraging.
+- Be clear and structured.
+- Do NOT generate fees or numbers.
+- Do NOT invent partnerships or degrees.
+- If factual info is needed, keep response general.
+- Keep response under 120 words.
+- Encourage student politely.
 """
+
     messages = [{"role": "system", "content": system_prompt}]
 
     for msg in st.session_state.chat_history:
@@ -169,8 +150,8 @@ Always adapt response to question.
     data = {
         "model": "llama-3.1-8b-instant",
         "messages": messages,
-        "temperature": 0.8,
-        "max_tokens": 300
+        "temperature": 0.7,
+        "max_tokens": 250
     }
 
     try:
@@ -182,16 +163,16 @@ Always adapt response to question.
         )
 
         if response.status_code != 200:
-            return "I'm facing a small technical issue. Please try again."
+            return "Please allow me a moment. Let me clarify that for you."
 
         result = response.json()
         return result["choices"][0]["message"]["content"]
 
-    except requests.exceptions.RequestException:
-        return "Unable to connect to AI service. Please try again."
+    except:
+        return "I'm facing a technical issue. Please try again."
 
 # =====================================
-# SAVE TO SUPABASE
+# SUPABASE SAVE
 # =====================================
 
 def save_chat(emotion, score, lead_type):
@@ -221,8 +202,8 @@ def save_chat(emotion, score, lead_type):
 
         requests.post(url, headers=headers, json=data, timeout=10)
 
-    except requests.exceptions.RequestException:
-        st.warning("Database connection failed. Lead not saved.")
+    except:
+        st.warning("Database connection issue.")
 
 # =====================================
 # UI
@@ -259,7 +240,7 @@ else:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    user_input = st.chat_input("Ask about CMA / ACCA / CA / Fees / Admission...")
+    user_input = st.chat_input("Ask about ACCA / CMA / Fees / Admission...")
 
     if user_input:
 
@@ -267,31 +248,54 @@ else:
             {"role": "user", "content": user_input}
         )
 
-        emotion = detect_emotion(user_input)
+        user_text = user_input.lower()
 
-        bot_reply = generate_ai_response(GROQ_API_KEY)
+        # ===== CONTROLLED FACT RESPONSES =====
+
+        if "fees" in user_text and "acca" in user_text:
+            bot_reply = f"""
+For ACCA at Invisor:
+
+Coaching Fee: {BROCHURE_DATA['ACCA']['coaching_fee']}
+
+{BROCHURE_DATA['ACCA']['exam_fee_note']}
+
+Duration: {BROCHURE_DATA['ACCA']['duration']}
+
+Would you like a stage-wise breakdown?
+"""
+
+        elif "fees" in user_text and "cma" in user_text:
+            bot_reply = f"""
+For CMA at Invisor:
+
+Coaching Fee: {BROCHURE_DATA['CMA']['coaching_fee']}
+
+Duration: {BROCHURE_DATA['CMA']['duration']}
+
+Structure: {BROCHURE_DATA['CMA']['structure']}
+
+Would you like guidance on eligibility?
+"""
+
+        elif "degree" in user_text and "acca" in user_text:
+            bot_reply = BROCHURE_DATA["ACCA"]["degree_info"]
+
+        else:
+            bot_reply = generate_ai_response(GROQ_API_KEY)
 
         st.session_state.chat_history.append(
             {"role": "assistant", "content": bot_reply}
         )
 
+        emotion = detect_emotion(user_input)
         score, lead_type = calculate_lead_score(
             st.session_state.chat_history,
             emotion
         )
 
-        if score >= 80 and not st.session_state.chat_completed:
-            st.session_state.chat_completed = True
-            st.session_state.chat_history.append(
-                {
-                    "role": "assistant",
-                    "content": "Would you like me to arrange a personal counselling call for admission guidance?"
-                }
-            )
-
         save_chat(emotion, score, lead_type)
 
-        # Debug (remove later)
         st.write("Lead Score:", score)
         st.write("Lead Type:", lead_type)
 
