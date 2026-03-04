@@ -41,41 +41,26 @@ def generate_response(user_input):
         "Content-Type": "application/json"
     }
 
-    system_prompt = """
-You are a highly professional academic counsellor from Kerala.
-You help students choose between ACCA, CA, and CMA.
-
-Rules:
-- Be conversational and natural.
-- Answer specifically to the student question.
-- Use Kerala context.
-- Be persuasive but not pushy.
-- Encourage booking a FREE career counselling call.
-- Keep response under 180 words.
-"""
-
     payload = {
-        "model": GROQ_MODEL,
+        "model": "llama3-70b-8192",
         "messages": [
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": "You are a helpful academic counsellor from Kerala."},
             {"role": "user", "content": user_input}
         ],
         "temperature": 0.8,
         "max_tokens": 300
     }
 
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
+    response = requests.post(url, headers=headers, json=payload)
 
-        if response.status_code != 200:
-            return fallback_reply()
+    st.write("STATUS CODE:", response.status_code)
+    st.write("RAW RESPONSE:", response.text)
 
+    if response.status_code == 200:
         result = response.json()
         return result["choices"][0]["message"]["content"]
 
-    except Exception:
-        return fallback_reply()
-
+    return "API Failed"
 def fallback_reply():
     return (
         "ACCA, CA, and CMA are strong professional courses. "
