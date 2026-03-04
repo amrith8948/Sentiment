@@ -80,21 +80,17 @@ def generate_response(user_input, emotion):
     }
 
     system_prompt = f"""
-You are a highly trained academic counsellor from Kerala.
+You are a Kerala-based academic counsellor.
 
 Student emotion: {emotion}
 
-Instructions:
-- Speak naturally like a Kerala mentor
-- Adapt tone based on emotion
-- Promote ACCA, CA, CMA smartly
-- DO NOT repeat same reply
-- Keep under 150 words
-- Ask one engaging follow-up question
-- Be persuasive but not pushy
+Speak naturally.
+Promote ACCA, CA, CMA smartly.
+Be persuasive but not repetitive.
+Ask one follow-up question.
+Keep under 150 words.
 """
 
-    # Include chat memory
     messages = [
         {"role": "system", "content": system_prompt.strip()}
     ]
@@ -105,26 +101,27 @@ Instructions:
     messages.append({"role": "user", "content": user_input.strip()})
 
     payload = {
-        "model": "llama3-70b-8192",
+        "model": "llama3-8b-8192",  # 👈 IMPORTANT CHANGE (70B sometimes blocked)
         "messages": messages,
         "temperature": 0.9,
-        "top_p": 0.9,
-        "max_tokens": 250
+        "max_tokens": 200
     }
 
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        response = requests.post(url, headers=headers, json=payload)
+
+        st.write("DEBUG STATUS:", response.status_code)
 
         if response.status_code != 200:
-            return "That’s interesting. Tell me more about your career goals."
+            st.write("DEBUG ERROR:", response.text)
+            return "⚠ API error — check logs."
 
         result = response.json()
 
         return result["choices"][0]["message"]["content"]
 
-    except:
-        return "I’d love to guide you properly. What are you currently studying?"
-
+    except Exception as e:
+        return f"Exception: {str(e)}"
 # -------------------------------
 # SAVE TO SUPABASE (ONE ROW PER CHAT)
 # -------------------------------
